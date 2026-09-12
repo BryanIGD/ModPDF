@@ -22,3 +22,8 @@ This product depends on software developed by third parties:
   Pillow      MIT-CMU                         https://github.com/python-pillow/Pillow
   Typer       MIT License                     https://github.com/fastapi/typer
   Rich        MIT License                     https://github.com/Textualize/rich
+  NumPy       BSD-3-Clause                    https://github.com/numpy/numpy
+
+Optional, installed only with the [gui] extra and never bundled:
+
+  PySide6     LGPL-3.0                        https://www.qt.io/qt-for-python

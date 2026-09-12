@@ -28,6 +28,7 @@ __all__ = [
     "FileSystemError",
     "SyncedLocation",
     "atomic_write",
+    "private_scratch_dir",
     "resolve_input",
     "synced_location",
 ]
@@ -100,6 +101,26 @@ def atomic_write(destination: Path, *, overwrite: bool = False) -> Iterator[Path
     except BaseException:
         staged.unlink(missing_ok=True)
         raise
+
+
+def private_scratch_dir() -> Path:
+    """A private directory for files this process writes for its own use.
+
+    The desktop app needs one for building a combined workspace out of more
+    than one PDF, which happens when you open a second file while one is
+    already open: pdfium and every whole-document task function both
+    need a real path on disk, so the combined result has to be written
+    somewhere before it can become the session's document. This is not
+    output the user asked to save — it is scratch state the session is built
+    on, and it is cleaned up when the window closes.
+
+    `mkstemp`'s 0600-and-O_EXCL guarantee is for files, not directories, so
+    the 0700 permission is set explicitly here rather than assumed from the
+    platform default.
+    """
+    created = Path(tempfile.mkdtemp(prefix="modpdf-workspace-"))
+    created.chmod(0o700)
+    return created
 
 
 def _flush_to_disk(path: Path) -> None:

@@ -10,6 +10,8 @@ nothing.
 
 from __future__ import annotations
 
+import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,44 @@ import pypdfium2
 import pytest
 from reportlab.lib.pagesizes import LETTER
 from reportlab.pdfgen import canvas
+
+# Set before anything imports `modpdf.cli`: its Rich consoles re-measure the
+# terminal on every print, so a test asserting on captured CLI output would
+# otherwise wrap and style differently depending on whatever terminal (or
+# lack of one) happens to be running the suite. This was a real, confirmed
+# bug, not a hypothetical: GitHub Actions' runners wrapped a long `tmp_path`
+# error message onto two lines that a real terminal would not have, breaking
+# a substring assertion. A wide terminal here avoids that.
+#
+# It does not, on its own, stop every runner from styling output — Rich has
+# its own reasons to decide a CI environment can render ANSI, and no
+# combination of NO_COLOR/FORCE_COLOR/CLICOLOR_FORCE reliably overrides that
+# in every version. `plain_cli_output` below is the actual fix for styling;
+# this is only for width. Safe to set from here even though this module
+# doesn't import `modpdf.cli` itself: conftest.py is always collected before
+# any test module, so this still runs first.
+os.environ["COLUMNS"] = "200"
+os.environ["NO_COLOR"] = "1"
+os.environ.pop("FORCE_COLOR", None)
+os.environ.pop("CLICOLOR_FORCE", None)
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def plain_cli_output(text: str) -> str:
+    """Strip ANSI styling and collapse whitespace from captured CLI output.
+
+    Rich may style or wrap a command's output differently depending on
+    whether the terminal running the suite is real, how wide it is, or
+    whether the environment (GitHub Actions' runners, for one) makes Rich
+    decide it can render color anyway. A test asserting a flag's name or a
+    phrase appears in that output needs to survive all of that, since none
+    of it is what the test is actually about — use this rather than
+    asserting on `result.output` directly whenever the check is "does this
+    text appear," not "does this text render a particular way."
+    """
+    return " ".join(_ANSI.sub("", text).split())
+
 
 PageMaker = Callable[..., Path]
 
@@ -177,6 +217,169 @@ def outline_summary(path: Path) -> list[tuple[int, str, int]]:
 
             walk(outline.root, 0)
     return summary
+
+
+# Placing a fixture's image in a box smaller than the full page raises its
+# effective DPI without needing a larger, slower-to-process pixel count — a
+# 900x1100px image at 259 DPI takes the same instant to build and compress as
+# one at 106 DPI, and 259 clears the default 200 DPI target with real margin.
+_SMALL_BOX_PT = (250, 306)
+
+
+def build_photo_pdf(path: Path, *, width_px: int = 900, height_px: int = 1100) -> Path:
+    """A page holding one genuinely photographic image: a smooth gradient plus
+    continuous-tone noise, placed at roughly 259 effective DPI.
+
+    This is deliberately not flat colour and not line art. Flate/PNG-style
+    compression is very good at large uniform regions and poor at continuous
+    tonal variation; JPEG is the other way round. A fixture built from flat
+    shapes would make Flate look artificially competitive with JPEG and give
+    `compress` nothing honest to test — this is shaped like what a real photo
+    or a textured scan actually looks like to a compressor.
+    """
+    import numpy as np
+    from PIL import Image
+
+    rng = np.random.default_rng(42)
+    yy, xx = np.mgrid[0:height_px, 0:width_px]
+    gradient = (xx / width_px * 120 + yy / height_px * 80).astype(np.float32)
+    noise = rng.normal(0, 8, size=(height_px, width_px)).astype(np.float32)
+    base = np.clip(gradient + noise + 60, 0, 255).astype(np.uint8)
+    rgb = np.stack(
+        [
+            base,
+            np.clip(base * 0.9 + 20, 0, 255).astype(np.uint8),
+            np.clip(base * 1.1, 0, 255).astype(np.uint8),
+        ],
+        axis=-1,
+    )
+    image_path = path.with_suffix(".png")
+    Image.fromarray(rgb, mode="RGB").save(image_path)
+
+    pdf = canvas.Canvas(str(path), pagesize=LETTER)
+    pdf.drawImage(str(image_path), x=40, y=40, width=_SMALL_BOX_PT[0], height=_SMALL_BOX_PT[1])
+    pdf.showPage()
+    pdf.save()
+    return path
+
+
+def build_scan_pdf(
+    path: Path, *, width_px: int = 900, height_px: int = 1100, seed: int = 7
+) -> Path:
+    """A page holding one image shaped like scanned text: many small, sharp,
+    irregularly-placed dark rectangles on a light background, at roughly 259
+    effective DPI.
+
+    This is what makes the verification gate meaningful to test: text is all
+    hard edges, and resampling shifts those edges by a fraction of a pixel,
+    which is exactly the failure mode a naive worst-single-pixel comparison
+    cannot tell apart from real degradation. A fixture built from soft
+    gradients would never exercise that. The same irregularity is also what
+    makes this a fair test of whether recompression helps at all: a perfectly
+    periodic pattern (a checkerboard, say) compresses so well under plain
+    Flate that no recompression can beat it, which says nothing about how
+    recompression performs on an actual scanned page.
+    """
+    from PIL import Image, ImageDraw
+
+    image = Image.new("L", (width_px, height_px), 250)
+    draw = ImageDraw.Draw(image)
+    rng = __import__("random").Random(seed)
+    line_height = max(6, height_px // 55)
+    for line_y in range(int(height_px * 0.05), int(height_px * 0.95), line_height * 2):
+        x = int(width_px * 0.06)
+        limit = int(width_px * 0.92)
+        while x < limit:
+            run = rng.randint(6, 30)
+            draw.rectangle(
+                [x, line_y, x + run, line_y + line_height - 2],
+                fill=rng.choice([10, 20, 30, 15]),
+            )
+            x += run + rng.randint(4, 12)
+
+    image_path = path.with_suffix(".png")
+    image.convert("RGB").save(image_path)
+
+    pdf = canvas.Canvas(str(path), pagesize=LETTER)
+    pdf.drawImage(str(image_path), x=40, y=40, width=_SMALL_BOX_PT[0], height=_SMALL_BOX_PT[1])
+    pdf.showPage()
+    pdf.save()
+    return path
+
+
+def build_bilevel_pdf(
+    path: Path, *, width_px: int = 760, height_px: int = 929, seed: int = 11
+) -> Path:
+    """A page holding one 1-bit image shaped like scanned text, at roughly
+    219 effective DPI, for testing CCITT G4 recompression.
+
+    Deliberately irregular strokes rather than a periodic pattern such as a
+    checkerboard: a checkerboard's perfect regularity lets plain Flate
+    compress it almost as well as a purpose-built codec can, which would make
+    G4 look pointless for exactly the reason real scanned text is not
+    checkerboard-shaped.
+    """
+    from PIL import Image, ImageDraw
+
+    image = Image.new("1", (width_px, height_px), 1)
+    draw = ImageDraw.Draw(image)
+    rng = __import__("random").Random(seed)
+    line_height = max(4, height_px // 55)
+    for line_y in range(int(height_px * 0.05), int(height_px * 0.95), line_height * 2):
+        x = int(width_px * 0.06)
+        limit = int(width_px * 0.92)
+        while x < limit:
+            run = rng.randint(4, 20)
+            draw.rectangle([x, line_y, x + run, line_y + line_height - 2], fill=0)
+            x += run + rng.randint(3, 8)
+
+    image_path = path.with_suffix(".png")
+    image.save(image_path)
+
+    box_width = _SMALL_BOX_PT[0]
+    box_height = box_width * height_px / width_px
+    pdf = canvas.Canvas(str(path), pagesize=LETTER)
+    pdf.drawImage(str(image_path), x=40, y=40, width=box_width, height=box_height)
+    pdf.showPage()
+    pdf.save()
+    return path
+
+
+def add_cmyk_image(pdf: pikepdf.Pdf, page_index: int = 0, *, size_px: int = 64) -> pikepdf.Object:
+    """Add a CMYK image XObject directly to a page, since reportlab cannot
+    emit CMYK images itself. Returns the XObject, already placed on the page.
+    """
+    import io as _io
+
+    from PIL import Image as _Image
+
+    cmyk = _Image.new("CMYK", (size_px, size_px), (255, 0, 0, 0))
+    buffer = _io.BytesIO()
+    cmyk.save(buffer, format="JPEG", quality=90)
+
+    page = pdf.pages[page_index]
+    xobj = pdf.make_stream(
+        buffer.getvalue(),
+        Type=pikepdf.Name("/XObject"),
+        Subtype=pikepdf.Name("/Image"),
+        Width=size_px,
+        Height=size_px,
+        BitsPerComponent=8,
+        ColorSpace=pikepdf.Name("/DeviceCMYK"),
+        Filter=pikepdf.Name("/DCTDecode"),
+    )
+    if "/XObject" not in page.obj["/Resources"]:
+        page.obj["/Resources"]["/XObject"] = pdf.make_indirect(pikepdf.Dictionary())
+    page.obj["/Resources"]["/XObject"]["/CmykTestImage"] = xobj
+
+    content = b"q 200 0 0 200 100 100 cm /CmykTestImage Do Q\n"
+    existing = page.obj.get("/Contents")
+    new_stream = pdf.make_stream(content)
+    if existing is None:
+        page.obj["/Contents"] = new_stream
+    else:
+        page.obj["/Contents"] = pdf.make_indirect(pikepdf.Array([existing, new_stream]))
+    return xobj
 
 
 @pytest.fixture

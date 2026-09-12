@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pikepdf
 
@@ -96,11 +96,20 @@ def open_pdf(
         pdf.close()
 
 
-def save_pdf(pdf: pikepdf.Pdf, destination: Path, *, overwrite: bool = False) -> Path:
-    """Write a PDF to disk atomically. Returns the path actually written."""
+def save_pdf(
+    pdf: pikepdf.Pdf, destination: Path, *, overwrite: bool = False, **save_options: Any
+) -> Path:
+    """Write a PDF to disk atomically. Returns the path actually written.
+
+    `save_options` are forwarded to `pikepdf.Pdf.save` as-is — split, merge,
+    reorder and sanitize have no reason to pass any, but compress needs the
+    same structural-optimization options here that it used to estimate the
+    file's size, so that the number it reports is the number that lands on
+    disk rather than a close guess.
+    """
     with atomic_write(destination, overwrite=overwrite) as staged:
         try:
-            pdf.save(staged)
+            pdf.save(staged, **save_options)
         except pikepdf.PdfError as exc:
             raise DocumentError(f"failed to write {destination.name}: {exc}") from exc
     return destination

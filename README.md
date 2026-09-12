@@ -28,9 +28,9 @@ ModPDF is the boring, local version. Your files stay where they are.
 
 ## Status
 
-Early development. Phases 1 and 2 of seven are done: the three page operations
-work, and the security layer they rest on is built and tested. Compression,
-which is the interesting one, does not exist yet.
+Early development. Four of seven phases are done: the three page operations,
+the security layer they rest on, and compression with the verification harness
+that makes it trustworthy.
 
 There is no release to install. Everything below is real output from the
 commands as they currently run.
@@ -124,6 +124,63 @@ Plain web links are kept by default, since a citation in a report is content and
 the reader has to click it. Actions that fire on their own or execute code are
 not. `--strip-links` removes links too.
 
+### Compressing it
+
+A PDF that is text and vector graphics is already a set of compressed drawing
+commands — there is no clever trick left to apply. Every dramatic size
+reduction you've seen advertised came from one thing: recompressing scanned
+images. `compress` is honest about that rather than pretending otherwise:
+
+```
+$ modpdf compress deposition.pdf -o smaller.pdf
+smaller.pdf  461.4 KB → 13.5 KB  (97% smaller)
+  images     1 recompressed, 0 left alone   387.1 KB → 12.2 KB
+  quality    text identical · largest visible difference 2.8% of one page   PASS
+```
+
+Every page is rendered and compared against the original before the result is
+accepted. If any page looks different enough to matter, the whole document
+falls back to a lossless result instead and says so — the worst case is a file
+smaller than you hoped for, never one that looks worse:
+
+```
+$ modpdf compress deposition.pdf -o smaller.pdf --target-dpi 15
+smaller.pdf  461.4 KB → 388.3 KB  (16% smaller)
+  images     1 recompressed, 0 left alone   387.1 KB → 442 B
+  quality    fell back to lossless — page 1: a region differs almost
+             completely (peak difference 250/255)
+```
+
+`--lossless` skips images entirely and only does the safe structural cleanup —
+not one pixel or glyph changes:
+
+```
+$ modpdf compress deposition.pdf -o smaller.pdf --lossless
+smaller.pdf  461.4 KB → 388.3 KB  (16% smaller)
+```
+
+A text-only document will not shrink much either way — there is no image data
+to recompress — and `compress` says so rather than inventing savings:
+
+```
+$ modpdf compress report.pdf -o smaller.pdf
+smaller.pdf was already optimal
+```
+
+Which codec an oversized image gets depends on what is actually in it, not on
+how it happens to be stored: content that is overwhelmingly near-black or
+near-white — scanned text, even when the file stores it as ordinary 8-bit
+grayscale rather than true 1-bit, which is the common case — gets CCITT Group
+4, lossless for that kind of content and usually the largest single win in the
+file. Genuine photographs and textured scans get JPEG at a conservative
+quality. Left deliberately untouched: **CMYK images** (a naive re-encode was
+tested against this project's own quality gate and came back with a pure cyan
+swatch rendering as white — the well-known Adobe CMYK-JPEG inversion problem,
+so this is a tested decision, not an oversight), **indexed/palette images**,
+and any image carrying a transparency mask, since resizing the mask correctly
+in lockstep with its parent is a feature this project intends to support but
+does not yet.
+
 ### Things that are easy to get wrong, and are handled
 
 - **Bookmarks survive.** Splitting a report rebuilds each piece's outline
@@ -150,13 +207,64 @@ not. `--strip-links` removes links too.
 - **Hostile input fails safely.** Malformed, truncated, empty and
   wrong-type files are refused with a clear message and no partial output.
 
+## The desktop app
+
+There is a window as well as a terminal. It is an optional extra, so a command
+line user never installs a GUI toolkit:
+
+```
+pip install modpdf[gui]
+modpdf-gui                  # or: modpdf-gui statement.pdf
+```
+
+Open a document and you get its pages as thumbnails: select them, drag to
+reorder, delete, duplicate, extract, split by range, compress. Nothing is
+written until you save, because the window holds your edits as an ordering of
+the original's pages rather than as a modified document — which is also why
+Revert costs nothing.
+
+**Open** builds a workspace out of more than one file, without a second
+button for it: open `pdf1`, then choose `pdf2` through the same Open button
+(or drop it onto the window), and the workspace holds `pdf1`'s pages followed
+by `pdf2`'s — including any reordering or deletion already pending on `pdf1`,
+because a second file arriving should not quietly undo the first one's
+edits. Do it again and a third file joins the same way. Dropping several
+files onto the window at once is a different, existing action — merge them
+straight to a new file rather than into the workspace, which is what you
+usually mean by dropping a whole batch in together. Combining files into a
+workspace needs a real file on disk — pdfium and every whole-document
+operation both require one — so each addition writes the combined result to
+a private, `0700` scratch directory the window
+creates for itself and deletes when it closes; it is never the user's chosen
+output location, and nothing in it survives the session.
+
+The two interfaces are not two implementations. Both call the same functions in
+`modpdf/tasks.py`, so a fix reaches both, and the window cannot reach the
+filesystem without going through the same security layer the terminal uses. It
+blocks its own network access at startup exactly as the CLI does, and the test
+suite asserts that a full open-edit-save cycle still works while the network is
+blocked.
+
+Two decisions carried over from the CLI's behaviour:
+
+- **Thumbnails are never written to disk.** A thumbnail cache is a folder of
+  readable pictures of confidential documents, sitting outside whatever
+  protection the original had, and it would outlive the session that made it.
+  Re-rendering on next launch is the cheaper trade.
+- **There is no recent-files list**, for the same reason: a list of paths to
+  confidential documents is itself a leak.
+
 ## Not built yet
 
-`compress`, and the verification harness it depends on. Also absent on purpose:
-subprocess isolation and a wall-clock timeout. A timeout that cannot interrupt
-work already running inside a native library would silently fail to fire, and
-shipping one would be worse than having none — so there is none until the work
-runs in its own process.
+Subprocess isolation and a wall-clock timeout, on purpose: a timeout that
+cannot interrupt work already running inside a native library would silently
+fail to fire, and shipping one would be worse than having none — so there is
+none until the work runs in its own process.
+
+Inside `compress` specifically: JBIG2 (a further improvement over CCITT G4 for
+bilevel scans, needing an external encoder for a marginal gain), font
+subsetting, and correct handling of transparency masks — see "Compressing it"
+above for the images that are deliberately left untouched until that lands.
 
 ## What it will not do
 
@@ -192,6 +300,11 @@ uv run pytest
 
 Lint, types and tests all run in CI on macOS, Linux and Windows. `uv run ruff
 check`, `uv run ruff format`, `uv run mypy`.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions this codebase actually
+enforces, and [THREAT_MODEL.md](THREAT_MODEL.md) for what the security claims
+above do and do not cover. Found a security issue? See
+[SECURITY.md](SECURITY.md) rather than opening a public issue.
 
 ## Licence
 

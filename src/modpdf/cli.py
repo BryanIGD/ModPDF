@@ -1,30 +1,28 @@
 """The `modpdf` command line.
 
 This layer does three things and nothing else: turn arguments into the values
-the operations want, call them, and report what happened. Any logic that a
-future GUI would also need belongs in `modpdf.ops`, not here.
+an operation wants, call it, and report what happened. The operations themselves
+live in `modpdf.tasks`, which the desktop app calls too — anything the GUI would
+also need belongs there rather than here.
 """
 
 from __future__ import annotations
 
 import textwrap
 from collections.abc import Callable, Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, TypeVar
 
-import pikepdf
 import typer
 from rich.console import Console
 
-from modpdf import __version__
-from modpdf.document import DocumentError, EncryptedDocumentError, open_pdf, save_pdf
-from modpdf.inspection import Inspection, count_revisions, inspect_document
-from modpdf.ops.merge import merge_documents
+from modpdf import __version__, tasks
+from modpdf.document import DocumentError, EncryptedDocumentError
+from modpdf.inspection import Inspection
+from modpdf.ops.compress import DEFAULT_TARGET_DPI, CompressReport, Mode
 from modpdf.ops.sanitize import SanitizeReport
-from modpdf.ops.sanitize import sanitize as sanitize_document
-from modpdf.ops.select import select_pages
 from modpdf.ops.split import Piece, chunks, plan_pieces
 from modpdf.pagespec import PageSpecError, parse_pagespec, parse_pagespec_groups
 from modpdf.security import netguard, secrets
@@ -37,6 +35,8 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+T = TypeVar("T")
 
 out = Console()
 err = Console(stderr=True)
@@ -87,28 +87,24 @@ def damage_reporter(name: str) -> Callable[[list[str]], None]:
     return report
 
 
-@contextmanager
-def opened(source: Path, *, use_stdin: bool = False) -> Iterator[pikepdf.Pdf]:
-    """Open a PDF, asking for a password only if it turns out to need one.
+def with_password(source: Path, use_stdin: bool, work: Callable[[str | None], T]) -> T:
+    """Run `work` with a password, asking for one only if it turns out to be needed.
 
     Trying first and prompting second means an unencrypted document never asks
-    anything, and an encrypted one asks once, at the moment it matters.
+    anything, and an encrypted one asks once, at the moment it matters. The whole
+    task is retried rather than the open alone, because a task writes nothing
+    until it succeeds — so a retry cannot leave half a document behind.
     """
     password = secrets.resolve(use_stdin=use_stdin)
-    on_damage = damage_reporter(source.name)
     try:
-        with open_pdf(source, password=password, on_damage=on_damage) as pdf:
-            yield pdf
-        return
+        return work(password)
     except EncryptedDocumentError:
         if password is not None:
             raise
         entered = secrets.ask(source.name)
         if entered is None:
             raise
-
-    with open_pdf(source, password=entered, on_damage=on_damage) as pdf:
-        yield pdf
+    return work(entered)
 
 
 def version_callback(requested: bool) -> None:
@@ -172,28 +168,31 @@ def split(
         if (pages is None) == (every is None):
             raise ValueError("choose exactly one of --pages or --every")
 
-        with opened(source, use_stdin=password_stdin) as pdf:
-            count = len(pdf.pages)
+        def plan_and_split(password: str | None) -> tuple[int, list[Piece]]:
+            count = tasks.page_count(source, password=password)
             groups = (
                 parse_pagespec_groups(pages, count) if pages is not None else chunks(count, every)  # type: ignore[arg-type]
             )
             pieces = plan_pieces(source.stem, groups)
-
             if dry_run:
-                _preview(pieces, output_dir, count)
-                return
+                return count, pieces
 
-            # 0700: a folder about to hold pieces of a confidential document
-            # should not be readable by other accounts on the machine.
             warn_if_synced(output_dir)
-            output_dir.expanduser().mkdir(parents=True, exist_ok=True, mode=0o700)
+            tasks.split_document(
+                source,
+                pieces,
+                output_dir,
+                password=password,
+                overwrite=force,
+                on_damage=damage_reporter(source.name),
+            )
+            return count, pieces
 
-            for piece in pieces:
-                save_pdf(
-                    select_pages(pdf, piece.indices),
-                    output_dir / piece.filename,
-                    overwrite=force,
-                )
+        count, pieces = with_password(source, password_stdin, plan_and_split)
+
+        if dry_run:
+            _preview(pieces, output_dir, count)
+            return
 
         out.print(f"{count} pages → {len(pieces)} files in {output_dir}")
         for piece in pieces:
@@ -218,17 +217,22 @@ def merge(
         if len(sources) < 2:
             raise ValueError("merging needs at least two files")
 
-        with ExitStack() as stack:
-            documents = [
-                stack.enter_context(opened(path, use_stdin=password_stdin)) for path in sources
-            ]
-            counts = " + ".join(str(len(pdf.pages)) for pdf in documents)
-            merged = merge_documents(documents)
-            total = len(merged.pages)
-            warn_if_synced(output)
-            save_pdf(merged, output, overwrite=force)
+        warn_if_synced(output)
 
-        out.print(f"{len(sources)} files ({counts} pages) → {output} [dim]{total} pages[/dim]")
+        def do_merge(password: str | None) -> list[int]:
+            _, counts = tasks.merge_files(
+                sources,
+                output,
+                password=password,
+                overwrite=force,
+                on_damage=damage_reporter(sources[0].name),
+            )
+            return counts
+
+        counts = with_password(sources[0], password_stdin, do_merge)
+        summary = " + ".join(str(n) for n in counts)
+        total = sum(counts)
+        out.print(f"{len(sources)} files ({summary} pages) → {output} [dim]{total} pages[/dim]")
 
 
 @app.command()
@@ -247,12 +251,22 @@ def reorder(
     page out of --order leaves it out of the document.
     """
     with reporting():
-        with opened(source, use_stdin=password_stdin) as pdf:
-            original = len(pdf.pages)
+
+        def do_reorder(password: str | None) -> tuple[int, list[int]]:
+            original = tasks.page_count(source, password=password)
             indices = parse_pagespec(order, original)
             warn_if_synced(output)
-            save_pdf(select_pages(pdf, indices), output, overwrite=force)
+            tasks.extract_pages(
+                source,
+                indices,
+                output,
+                password=password,
+                overwrite=force,
+                on_damage=damage_reporter(source.name),
+            )
+            return original, indices
 
+        original, indices = with_password(source, password_stdin, do_reorder)
         dropped = original - len(set(indices))
         note = f" [yellow]({dropped} pages dropped)[/yellow]" if dropped else ""
         out.print(f"{original} pages → {output} [dim]{len(indices)} pages[/dim]{note}")
@@ -274,7 +288,11 @@ def inspect(
     in here besides the pages I can see?
     """
     with reporting():
-        found = inspect_document(source, password=secrets.resolve(use_stdin=password_stdin))
+        found = with_password(
+            source,
+            password_stdin,
+            lambda password: tasks.inspect_file(source, password=password),
+        )
 
         if as_json:
             out.print_json(data=_as_dict(found))
@@ -372,19 +390,22 @@ def sanitize(
     page stays there, and a black rectangle drawn over text does not remove it.
     """
     with reporting():
-        revisions = count_revisions(source.expanduser().read_bytes()) if source.exists() else 1
+        warn_if_synced(output)
 
-        with opened(source, use_stdin=password_stdin) as pdf:
-            cleaned, report = sanitize_document(
-                pdf,
+        def do_sanitize(password: str | None) -> tuple[int, SanitizeReport]:
+            pages = tasks.page_count(source, password=password)
+            _, report = tasks.sanitize_file(
+                source,
+                output,
                 keep_metadata=keep_metadata,
                 strip_links=strip_links,
-                revisions=revisions,
+                password=password,
+                overwrite=force,
+                on_damage=damage_reporter(source.name),
             )
-            pages = len(cleaned.pages)
-            warn_if_synced(output)
-            save_pdf(cleaned, output, overwrite=force)
+            return pages, report
 
+        pages, report = with_password(source, password_stdin, do_sanitize)
         _print_sanitize_report(report, output, pages)
 
 
@@ -416,6 +437,93 @@ def _print_sanitize_report(report: SanitizeReport, output: Path, pages: int) -> 
     out.print("  removed: " + ", ".join(lines))
     out.print("  [dim]Pages and text are unchanged. This is not redaction:[/dim]")
     out.print("  [dim]anything visible on a page is still there.[/dim]")
+
+
+@app.command()
+def compress(
+    source: Annotated[Path, typer.Argument(help="The PDF to compress.")],
+    output: Annotated[Path, typer.Option("--out", "-o", help="The compressed PDF.")],
+    lossless: Annotated[
+        bool,
+        typer.Option("--lossless", help="Structural cleanup only. Not one pixel or glyph changes."),
+    ] = False,
+    target_dpi: Annotated[
+        int,
+        typer.Option("--target-dpi", help="Downsample images above this effective resolution."),
+    ] = DEFAULT_TARGET_DPI,
+    no_verify: Annotated[
+        bool,
+        typer.Option(
+            "--no-verify",
+            help="Skip comparing the result against the original. Faster; not recommended.",
+        ),
+    ] = False,
+    force: Annotated[bool, typer.Option("--force", help="Overwrite an existing file.")] = False,
+    password_stdin: Annotated[
+        bool, typer.Option("--password-stdin", help="Read the document password from stdin.")
+    ] = False,
+) -> None:
+    """Shrink a PDF. Images above --target-dpi are downsampled; text and
+    vector content are never touched.
+
+    A text-only document will not shrink much — there is no image data to
+    recompress, and the structural cleanup this still does is usually a small
+    fraction of the file. Real savings come from oversized scanned images.
+
+    Every compressed page is checked against the original before being
+    accepted. If any page looks different enough to matter, the whole
+    document falls back to the lossless result instead, and the report says
+    so — the worst case is a file smaller than hoped for, never one that
+    looks worse.
+    """
+    with reporting():
+        warn_if_synced(output)
+        mode: Mode = "lossless" if lossless else "visual"
+
+        def do_compress(password: str | None) -> CompressReport:
+            _, report = tasks.compress_file(
+                source,
+                output,
+                mode=mode,
+                target_dpi=target_dpi,
+                verify=not no_verify,
+                password=password,
+                overwrite=force,
+                on_damage=damage_reporter(source.name),
+            )
+            return report
+
+        report = with_password(source, password_stdin, do_compress)
+        _print_compress_report(report, output)
+
+
+def _print_compress_report(report: CompressReport, output: Path) -> None:
+    out.print(
+        f"{output.name}  {_human_size(report.before_bytes)} → "
+        f"{_human_size(report.after_bytes)}  [dim]({report.savings_ratio * 100:.0f}% smaller)[/dim]"
+    )
+
+    if report.already_optimal:
+        out.print("  [green]already optimal[/green] — nothing here was worth rewriting")
+        return
+
+    images = report.images
+    if images.recompressed:
+        out.print(
+            f"  images     {images.recompressed} recompressed, {images.left_alone} left alone"
+            f"   {_human_size(images.bytes_before)} → {_human_size(images.bytes_after)}"
+        )
+    elif images.left_alone:
+        out.print(f"  images     {images.left_alone} already at or below the target, left alone")
+
+    if report.fell_back:
+        out.print(f"  [yellow]quality[/yellow]    fell back to lossless — {report.fallback_reason}")
+    elif report.verify_result is not None and report.mode_used == "visual":
+        v = report.verify_result
+        out.print(
+            f"  quality    text identical · largest visible difference "
+            f"{v.differing_fraction * 100:.1f}% of one page   [green]PASS[/green]"
+        )
 
 
 def _preview(pieces: list[Piece], output_dir: Path, page_count: int) -> None:
