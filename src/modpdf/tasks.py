@@ -236,6 +236,7 @@ def compress_file(
             max_differing_fraction=settings.max_differing_fraction,
             max_single_pixel_delta=settings.max_single_pixel_delta,
             always_recompress=settings.always_recompress,
+            flatten_vector_pages=settings.flatten_vector_pages,
         )
         written = save_pdf(
             compressed, destination, overwrite=overwrite, **compress_module.STRUCTURAL_SAVE_OPTIONS

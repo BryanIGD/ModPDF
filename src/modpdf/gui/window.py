@@ -896,6 +896,14 @@ class MainWindow(QMainWindow):
                 f"   {_human_size(images.bytes_before)} → {_human_size(images.bytes_after)}</span>"
             )
 
+        if report.pages_flattened:
+            pages_word = "page" if report.pages_flattened == 1 else "pages"
+            lines.append(
+                f'<span style="font-size:11.5px; color:{theme.INK_2};">'
+                f"vector: {report.pages_flattened} {pages_word} of complex vector art "
+                "flattened to an image</span>"
+            )
+
         if report.fell_back:
             lines.append(
                 f'<span style="font-size:11.5px; color:{theme.WARN}; font-weight:600;">'
@@ -910,11 +918,13 @@ class MainWindow(QMainWindow):
             )
 
         if level == "high" and report.mode_used == "visual":
-            lines.append(
-                f'<span style="font-size:11px; color:{theme.WARN};">'
+            note = (
                 "maximum compression: image quality was reduced on purpose "
-                "to shrink the file further</span>"
+                "to shrink the file further"
             )
+            if report.pages_flattened:
+                note += " — text stays selectable even on a flattened page; only its vector art was"
+            lines.append(f'<span style="font-size:11px; color:{theme.WARN};">{note}</span>')
 
         self.compress_result.setText("<br>".join(lines))
 

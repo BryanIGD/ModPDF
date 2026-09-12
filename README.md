@@ -165,6 +165,26 @@ two levels touch — otherwise a document whose images were already exported at
 a reasonable size (a screen-resolution scan, say) would have nothing left for
 "maximum compression" to shrink beyond what `balanced` already did.
 
+Not every large PDF is large because of its images. A complex vector diagram
+— thousands of curves and fills a design tool exported directly as drawing
+commands, not as a picture — can outweigh every image in the file combined,
+and no image setting touches it, because it is not an image. `high` is also
+the one level that rasterizes a page whose own vector content is heavy enough
+to be worth it, while leaving every character of text on that page exactly as
+it was — including text that is itself part of the diagram, like a box's own
+label:
+
+```
+$ modpdf compress paper.pdf -o smaller.pdf --level high
+paper.pdf  2.3 MB → 887.0 KB  (62% smaller)
+  images     3 already at or below the target, left alone
+  vector     1 page of complex vector art flattened to an image
+  quality    text identical · largest visible difference 2.4% of one page   PASS
+  note       maximum compression: image quality was reduced on purpose to
+             shrink the file further; text stays selectable even on a
+             flattened page — only its vector art was
+```
+
 `--lossless` skips images entirely and only does the safe structural cleanup —
 not one pixel or glyph changes, and `--level` has nothing to do in this mode:
 

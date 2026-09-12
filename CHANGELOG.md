@@ -48,7 +48,12 @@ Nothing tagged yet. The first release will be 0.1.0.
   eligible image at a lower JPEG quality even when it was not oversized,
   since otherwise a document whose images were already reasonably sized had
   nothing left for "maximum compression" to do beyond what `balanced` already
-  did — and the report says so when it happens.
+  did — and the report says so when it happens. `high` also rasterizes a
+  page whose own vector content (not an image at all — a complex diagram
+  exported as drawing commands) is heavy enough to be worth it, since no
+  image setting touches vector art; every character of text on that page,
+  including text that is part of the diagram itself, stays exactly as it
+  was and stays selectable.
 - A desktop application (`modpdf-gui`, optional extra `modpdf[gui]`, PySide6):
   page thumbnails with selection, drag-to-reorder (tracked by the mouse
   directly rather than through Qt's own drag-and-drop, which does not

@@ -62,6 +62,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import pikepdf
+import pypdfium2
 from pikepdf import Name
 from PIL import Image
 from PIL.TiffImagePlugin import TiffImageFile
@@ -127,6 +128,18 @@ class LevelSettings:
     # oversized — still gated by the same "keep only if it actually shrinks"
     # check every image goes through.
     always_recompress: bool = False
+    # A photo-heavy scan is not the only way a PDF gets large: a complex
+    # vector diagram (many thousands of curve/line operators, as design tools
+    # export them) can outweigh every raster image in the file combined, and
+    # no image setting touches it — text and vector art are never part of the
+    # image pass. When set, a page whose combined vector content exceeds
+    # `_FLATTEN_THRESHOLD_BYTES` is rasterized into one background image at
+    # `target_dpi`/`jpeg_quality`, while every text-showing operator is kept
+    # exactly as it was, unrasterized, on top of it — so extracted text is
+    # still identical, the one thing this stays non-negotiable about even at
+    # "high". Off for "low" and "balanced": both promise the page itself is
+    # untouched, not just its images.
+    flatten_vector_pages: bool = False
 
 
 LEVELS: dict[Level, LevelSettings] = {
@@ -150,6 +163,7 @@ LEVELS: dict[Level, LevelSettings] = {
         max_differing_fraction=0.45,
         max_single_pixel_delta=250,
         always_recompress=True,
+        flatten_vector_pages=True,
     ),
 }
 
@@ -185,6 +199,10 @@ class CompressReport:
     fell_back: bool = False
     fallback_reason: str | None = None
     verify_result: verify_module.VerifyResult | None = None
+    # Pages whose complex vector content was rasterized (see
+    # `LevelSettings.flatten_vector_pages`). Text on a flattened page is
+    # unaffected — it stays vector, on top of the new background image.
+    pages_flattened: int = 0
 
     @property
     def savings_ratio(self) -> float:
@@ -208,6 +226,7 @@ def compress(
     max_differing_fraction: float = verify_module.DEFAULT_MAX_DIFFERING_FRACTION,
     max_single_pixel_delta: int = verify_module.DEFAULT_MAX_SINGLE_PIXEL_DELTA,
     always_recompress: bool = False,
+    flatten_vector_pages: bool = False,
 ) -> tuple[pikepdf.Pdf, CompressReport]:
     """Return a compressed copy of `pdf`, and a report of what was done.
 
@@ -248,6 +267,14 @@ def compress(
             "maximum compression" preset) turns it on, since otherwise a
             document whose images were already reasonably sized would have
             nothing left to shrink.
+        flatten_vector_pages: Rasterize a page whose combined vector content
+            (its own content stream plus every Form XObject it draws) exceeds
+            `_FLATTEN_THRESHOLD_BYTES`. Text stays vector and identical; only
+            paths, shadings and images already on the page are replaced by
+            one background image at `target_dpi`/`jpeg_quality`. Off by
+            default: a photo-heavy scan never needs this, and a page that is
+            mostly a complex diagram is otherwise untouched by the image
+            pass entirely, since it has no oversized raster image to find.
 
     Returns:
         The document to save, and a report describing what happened. If
@@ -261,6 +288,9 @@ def compress(
 
     working = _clone(pdf)
     images = _recompress_images(working, target_dpi, jpeg_quality, always_recompress)
+    pages_flattened = 0
+    if flatten_vector_pages:
+        pages_flattened = _flatten_heavy_pages(working, target_dpi, jpeg_quality)
     visual_bytes = _saved_size(working)
 
     if verify:
@@ -283,10 +313,19 @@ def compress(
                 verify_result=verify_result,
             )
         return _choose(
-            pdf, working, visual_bytes, before_bytes, "visual", images, verify_result=verify_result
+            pdf,
+            working,
+            visual_bytes,
+            before_bytes,
+            "visual",
+            images,
+            verify_result=verify_result,
+            pages_flattened=pages_flattened,
         )
 
-    return _choose(pdf, working, visual_bytes, before_bytes, "visual", images)
+    return _choose(
+        pdf, working, visual_bytes, before_bytes, "visual", images, pages_flattened=pages_flattened
+    )
 
 
 def _choose(
@@ -300,6 +339,7 @@ def _choose(
     fell_back: bool = False,
     fallback_reason: str | None = None,
     verify_result: verify_module.VerifyResult | None = None,
+    pages_flattened: int = 0,
 ) -> tuple[pikepdf.Pdf, CompressReport]:
     """Accept the candidate if it is actually smaller; otherwise keep the original."""
     if candidate_bytes >= before_bytes:
@@ -322,6 +362,7 @@ def _choose(
         fell_back=fell_back,
         fallback_reason=fallback_reason,
         verify_result=verify_result,
+        pages_flattened=pages_flattened,
     )
     return candidate, report
 
@@ -740,3 +781,273 @@ def _record_dpi(
     key = xobj.objgen
     existing = dpi_by_xobject.get(key)
     dpi_by_xobject[key] = effective if existing is None else min(existing, effective)
+
+
+# ------------------------------------------------------- vector flattening
+
+# A page whose own content plus everything it draws through `Do` adds up to
+# more than this is a candidate for flattening. Below this, a complex-looking
+# figure is still cheap enough on disk that touching it would risk quality
+# for no real gain — the same "is it actually worth it" spirit as
+# `_MUST_SHRINK_TO` for images, just measured before the fact instead of
+# after, since rendering a page is too expensive to do speculatively on every
+# page of every document.
+_FLATTEN_THRESHOLD_BYTES = 150_000
+
+# Every operator that builds or paints a path, plus the clip operators that
+# only mean anything alongside one. In "text" mode these are dropped
+# entirely, not merely neutralized: a path that is never painted is still a
+# path, and on a page like this it is the geometry itself — thousands of
+# `m`/`l`/`c` operators — that accounts for nearly all of the size, not the
+# handful of operators that paint it.
+_PATH_GEOMETRY_OPERATORS = frozenset({"m", "l", "c", "v", "y", "h", "re"})
+_PATH_PAINT_OPERATORS = frozenset({"f", "F", "f*", "S", "s", "B", "B*", "b", "b*", "n", "W", "W*"})
+
+# Colour and stroke-style operators only matter if something after them
+# actually paints. A diagram that sets its own fill colour before every one
+# of thousands of shapes leaves exactly that many now-pointless colour
+# operators behind if they are kept unconditionally — on one real document
+# this was, on its own, larger than the whole original file. They are held
+# back rather than emitted immediately and only actually kept if something
+# that is not itself being dropped follows before the next one (`Tf`/`Tj`
+# reading the current fill colour for kept text, most importantly); if a
+# dropped path or image comes first instead, they only ever configured
+# something that no longer exists and are discarded with it.
+_DEFERRABLE_STATE_OPERATORS = frozenset(
+    {"rg", "RG", "g", "G", "k", "K", "sc", "SC", "scn", "SCN", "w", "J", "j", "M", "d"}
+)
+
+# The only operators that actually put glyph ink on the page. Everything
+# else text-related (BT, ET, Tf, Tm, Td, Tc, Tw, ...) only sets up state and
+# is harmless to leave in place around them.
+_TEXT_SHOW_OPERATORS = frozenset({"Tj", "TJ", "'", '"'})
+
+
+def _flatten_heavy_pages(pdf: pikepdf.Pdf, target_dpi: int, jpeg_quality: int) -> int:
+    """Rasterize the vector content of any page that is too complex to be
+    worth keeping as vector data, while leaving every character of text on
+    it exactly as it was.
+
+    Mutates `pdf` in place — callers pass a clone they own for this reason.
+    Returns how many pages were flattened.
+    """
+    flattened = 0
+    already_rewritten: set[tuple[int, int]] = set()
+
+    for page_index in range(len(pdf.pages)):
+        page = pdf.pages[page_index]
+        page.contents_coalesce()
+        streams = _vector_streams(page.obj, set())
+        if sum(_stream_size(stream) for stream in streams) < _FLATTEN_THRESHOLD_BYTES:
+            continue
+
+        background = _render_page_without_text(pdf, page_index, target_dpi)
+        if background is None:
+            continue  # a page that fails to render is left exactly as it was
+
+        for stream in streams:
+            key = stream.objgen
+            if key in already_rewritten:
+                continue
+            already_rewritten.add(key)
+            _rewrite_content(stream, keep="text")
+
+        _lay_background_image(pdf, page, background, jpeg_quality)
+        flattened += 1
+
+    return flattened
+
+
+def _vector_streams(
+    page_or_form: pikepdf.Object, seen: set[tuple[int, int]]
+) -> list[pikepdf.Object]:
+    """The page's own content stream, plus every Form XObject it draws,
+    walked recursively and deduplicated by object identity.
+
+    A page's `/Contents` is itself a content stream once coalesced; a Form
+    XObject's content *is* its own stream — both are returned as one flat
+    list so the caller can measure or rewrite them uniformly.
+    """
+    streams: list[pikepdf.Object] = []
+
+    contents = page_or_form.get("/Contents") if "/Contents" in page_or_form else page_or_form
+    if isinstance(contents, pikepdf.Stream):
+        key = contents.objgen
+        if key not in seen:
+            seen.add(key)
+            streams.append(contents)
+
+    resources = page_or_form.get("/Resources")
+    if resources is None or "/XObject" not in resources:
+        return streams
+
+    # A dictionary-shaped PDF object supports .values() at runtime; pikepdf's
+    # stub for the generic Object base does not say so, since not every
+    # Object is dictionary-shaped.
+    xobject_dict: Any = resources["/XObject"]
+    for xobj in xobject_dict.values():
+        if xobj.get("/Subtype") != Name("/Form"):
+            continue
+        key = xobj.objgen
+        if key in seen:
+            continue
+        seen.add(key)
+        streams.append(xobj)
+        streams.extend(_vector_streams(xobj, seen))
+
+    return streams
+
+
+def _rewrite_content(stream: pikepdf.Object, *, keep: str) -> None:
+    """Rewrite one content stream in place, in one of two ways.
+
+    `keep="text"` (used permanently, on the real document): every
+    text-showing operator is left untouched; every path, image and shading —
+    the ink itself, not merely the step that paints it — is dropped, since
+    that ink now comes from the flattened background image drawn behind it.
+
+    `keep="graphics"` (used only on a throwaway clone, purely to render the
+    background image): every text-showing operator is dropped so rendered
+    glyphs do not end up baked into the background too; everything else,
+    including images and shadings the page itself draws, is left untouched
+    so the background is otherwise a faithful copy of the original page.
+    """
+    try:
+        instructions = pikepdf.parse_content_stream(stream)
+    except Exception:
+        return  # a malformed content stream is not this function's problem to raise on
+
+    resources = stream.get("/Resources") if "/Resources" in stream else None
+    rewritten: list[pikepdf.ContentStreamInstruction | pikepdf.ContentStreamInlineImage] = []
+    # Colour/stroke-style operators held back until it is known whether
+    # anything kept actually follows before the next one — see
+    # `_DEFERRABLE_STATE_OPERATORS`.
+    pending: list[pikepdf.ContentStreamInstruction] = []
+
+    def flush() -> None:
+        rewritten.extend(pending)
+        pending.clear()
+
+    for instruction in instructions:
+        # An inline image (`BI ... ID ... EI`) is its own instruction type,
+        # not a plain operator/operand pair. In "graphics" mode it is real
+        # visual content and belongs in the render; in "text" mode its ink
+        # is already covered by the flattened background, so it is dropped.
+        if isinstance(instruction, pikepdf.ContentStreamInlineImage):
+            if keep == "graphics":
+                rewritten.append(instruction)
+            else:
+                pending.clear()  # any colour set up for it was for this alone
+            continue
+
+        operator = str(instruction.operator)
+
+        if keep == "graphics":
+            if operator in _TEXT_SHOW_OPERATORS:
+                continue
+            rewritten.append(instruction)
+            continue
+
+        # keep == "text"
+        if operator in _DEFERRABLE_STATE_OPERATORS:
+            pending.append(instruction)
+        elif operator in _PATH_GEOMETRY_OPERATORS or operator in _PATH_PAINT_OPERATORS:
+            pending.clear()  # only ever configured the path/paint being dropped here
+        elif operator == "sh":
+            pending.clear()  # a shading pattern paints directly; already in the background
+        elif operator == "Do" and instruction.operands and resources is not None:
+            name = str(instruction.operands[0])
+            xobject_dict = resources.get("/XObject") if "/XObject" in resources else None
+            target = xobject_dict.get(name) if xobject_dict is not None else None
+            if target is not None and target.get("/Subtype") == Name("/Image"):
+                pending.clear()  # baked into the background; a nested /Form is kept, see below
+            else:
+                flush()
+                rewritten.append(instruction)
+        else:
+            flush()
+            rewritten.append(instruction)
+
+    stream.write(pikepdf.unparse_content_stream(rewritten))
+
+
+def _render_page_without_text(
+    pdf: pikepdf.Pdf, page_index: int, target_dpi: int
+) -> Image.Image | None:
+    """The page's own graphics, rendered as pixels, with every character of
+    text removed first so it never becomes part of the background.
+
+    Works on a throwaway clone: the real document is never rendered with its
+    text stripped, only copied from for this one image.
+    """
+    clone = _clone(pdf)
+    try:
+        page = clone.pages[page_index]
+        page.contents_coalesce()
+        for stream in _vector_streams(page.obj, set()):
+            _rewrite_content(stream, keep="graphics")
+
+        buffer = io.BytesIO()
+        clone.save(buffer)
+        buffer.seek(0)
+        doc = pypdfium2.PdfDocument(buffer)
+        try:
+            scale = target_dpi / 72
+            rendered = doc[page_index].render(scale=scale).to_pil().convert("RGB")
+            return cast(Image.Image, rendered)
+        finally:
+            doc.close()
+    except Exception:
+        return None
+    finally:
+        clone.close()
+
+
+def _lay_background_image(
+    pdf: pikepdf.Pdf, page: pikepdf.Page, background: Image.Image, jpeg_quality: int
+) -> None:
+    """Embed `background` as a new Image XObject covering the full page, and
+    draw it first — behind whatever text-only content `_rewrite_content`
+    already left in place — by prepending its `Do` to the page's content."""
+    # `.mediabox` resolves the box even when a page inherits it from an
+    # ancestor /Pages node rather than setting its own — unlike reading
+    # `/MediaBox` directly, which is absent on such a page.
+    llx, lly, urx, ury = (float(value) for value in page.mediabox)
+    width_pt, height_pt = urx - llx, ury - lly
+
+    buffer = io.BytesIO()
+    background.save(buffer, format="JPEG", quality=jpeg_quality)
+    image_xobject = pikepdf.Stream(pdf, buffer.getvalue())
+    image_xobject.Type = Name("/XObject")
+    image_xobject.Subtype = Name("/Image")
+    image_xobject.Width = background.width
+    image_xobject.Height = background.height
+    image_xobject.ColorSpace = Name("/DeviceRGB")
+    image_xobject.BitsPerComponent = 8
+    image_xobject.Filter = Name("/DCTDecode")
+
+    if "/Resources" not in page.obj:
+        page.obj.Resources = pikepdf.Dictionary()
+    resources = page.obj.Resources
+    if "/XObject" not in resources:
+        resources.XObject = pikepdf.Dictionary()
+    xobject_dict = resources.XObject
+
+    name = "/ModPDFFlattenedBackground"
+    suffix = 0
+    while name in xobject_dict:
+        suffix += 1
+        name = f"/ModPDFFlattenedBackground{suffix}"
+    xobject_dict[name] = image_xobject
+
+    placement = pikepdf.unparse_content_stream(
+        [
+            pikepdf.ContentStreamInstruction([], pikepdf.Operator("q")),
+            pikepdf.ContentStreamInstruction(
+                [width_pt, 0, 0, height_pt, llx, lly], pikepdf.Operator("cm")
+            ),
+            pikepdf.ContentStreamInstruction([pikepdf.Name(name)], pikepdf.Operator("Do")),
+            pikepdf.ContentStreamInstruction([], pikepdf.Operator("Q")),
+        ]
+    )
+    page.obj.Contents.write(placement + b"\n" + page.obj.Contents.read_bytes())

@@ -28,6 +28,7 @@ from tests.conftest import (
     PageMaker,
     add_cmyk_image,
     build_bilevel_pdf,
+    build_dense_diagram_pdf,
     build_photo_pdf,
     build_scan_pdf,
     page_markers,
@@ -44,6 +45,7 @@ def compress_file(
     max_differing_fraction: float = verify_module.DEFAULT_MAX_DIFFERING_FRACTION,
     max_single_pixel_delta: int = verify_module.DEFAULT_MAX_SINGLE_PIXEL_DELTA,
     always_recompress: bool = False,
+    flatten_vector_pages: bool = False,
 ) -> tuple[pikepdf.Pdf, CompressReport]:
     """Open, compress, and hand back the result plus its report — the shape
     almost every test below wants, with the file's own size as `before_bytes`."""
@@ -59,6 +61,7 @@ def compress_file(
             max_differing_fraction=max_differing_fraction,
             max_single_pixel_delta=max_single_pixel_delta,
             always_recompress=always_recompress,
+            flatten_vector_pages=flatten_vector_pages,
         )
 
 
@@ -355,6 +358,83 @@ class TestCompressionLevels:
         _, recompressed = compress_file(source, target_dpi=400, always_recompress=True)
         assert recompressed.images.recompressed == 1
         assert recompressed.after_bytes < left_alone.after_bytes
+
+
+class TestFlatteningComplexVectorPages:
+    """A photo-heavy scan is not the only way a PDF gets large: a page whose
+    own vector content (not an image at all) is enormous is untouched by
+    every image-level setting, since there is no oversized image to find.
+    `flatten_vector_pages` (only ever on for "high") rasterizes such a page's
+    graphics while keeping every character of its text exactly as it was.
+    """
+
+    def test_only_high_flattens_by_default(self) -> None:
+        low, balanced, high = LEVELS["low"], LEVELS["balanced"], LEVELS["high"]
+        assert not low.flatten_vector_pages
+        assert not balanced.flatten_vector_pages
+        assert high.flatten_vector_pages
+
+    def test_a_heavy_vector_page_shrinks_with_text_intact(self, tmp_path: Path) -> None:
+        import pypdfium2
+
+        source = build_dense_diagram_pdf(tmp_path / "diagram.pdf")
+        # This test uses "high"'s own settings end to end, not only the flag
+        # under test: at this file's much gentler defaults (200 DPI, quality
+        # 82, the strict gate), the flattened background does not beat the
+        # original at all, which is exactly why "high" widens all three —
+        # the same reasoning `always_recompress`'s own tests already rely on.
+        high = LEVELS["high"]
+        result, report = compress_file(
+            source,
+            target_dpi=high.target_dpi,
+            jpeg_quality=high.jpeg_quality,
+            max_differing_fraction=high.max_differing_fraction,
+            max_single_pixel_delta=high.max_single_pixel_delta,
+            flatten_vector_pages=True,
+            always_recompress=True,
+        )
+        out = tmp_path / "out.pdf"
+        result.save(out, **STRUCTURAL_SAVE_OPTIONS)
+        result.close()
+
+        assert report.pages_flattened == 1
+        assert report.savings_ratio > 0.5
+        assert not report.fell_back
+
+        doc = pypdfium2.PdfDocument(str(out))
+        try:
+            assert doc[0].get_textpage().get_text_range().strip() == "Confidential Diagram Label"
+        finally:
+            doc.close()
+
+    def test_a_page_below_the_threshold_is_left_alone(self, tmp_path: Path) -> None:
+        source = build_dense_diagram_pdf(tmp_path / "diagram.pdf", shapes=200)
+        _, report = compress_file(source, flatten_vector_pages=True, always_recompress=True)
+        assert report.pages_flattened == 0
+
+    def test_flattening_is_off_by_default(self, tmp_path: Path) -> None:
+        """Without the flag, an otherwise-flattenable page is untouched —
+        this is what keeps "low" and "balanced" from ever rasterizing a
+        page's own vector art."""
+        source = build_dense_diagram_pdf(tmp_path / "diagram.pdf")
+        _, report = compress_file(source)
+        assert report.pages_flattened == 0
+
+    def test_an_unsuitable_result_falls_back_rather_than_shipping(self, tmp_path: Path) -> None:
+        """Pushed hard enough, a flattened page can still look different
+        enough to fail the quality gate — proving the safety net holds here
+        too, not only for the image pass. `pages_flattened` is 0 in the
+        accepted report either way: a rejected candidate is not what shipped.
+        """
+        source = build_dense_diagram_pdf(tmp_path / "diagram.pdf")
+        # An unreasonably harsh target forces heavy downsampling on top of
+        # the flattening, which is enough to tip this fixture's own gate.
+        _, report = compress_file(
+            source, target_dpi=20, flatten_vector_pages=True, always_recompress=True
+        )
+        assert report.fell_back
+        assert report.mode_used in ("lossless", "none")
+        assert report.pages_flattened == 0
 
 
 class TestNeitherInputIsModified:

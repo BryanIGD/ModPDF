@@ -528,6 +528,13 @@ def _print_compress_report(report: CompressReport, output: Path, level: Level) -
     elif images.left_alone:
         out.print(f"  images     {images.left_alone} already at or below the target, left alone")
 
+    if report.pages_flattened:
+        pages_word = "page" if report.pages_flattened == 1 else "pages"
+        out.print(
+            f"  vector     {report.pages_flattened} {pages_word} of complex vector art "
+            "flattened to an image"
+        )
+
     if report.fell_back:
         out.print(f"  [yellow]quality[/yellow]    fell back to lossless — {report.fallback_reason}")
     elif report.verify_result is not None and report.mode_used == "visual":
@@ -538,10 +545,12 @@ def _print_compress_report(report: CompressReport, output: Path, level: Level) -
         )
 
     if level == "high" and report.mode_used == "visual":
-        out.print(
-            "  [yellow]note[/yellow]       maximum compression: image quality was "
-            "reduced on purpose to shrink the file further"
+        note = (
+            "maximum compression: image quality was reduced on purpose to shrink the file further"
         )
+        if report.pages_flattened:
+            note += "; text stays selectable even on a flattened page — only its vector art was"
+        out.print(f"  [yellow]note[/yellow]       {note}")
 
 
 def _preview(pieces: list[Piece], output_dir: Path, page_count: int) -> None:

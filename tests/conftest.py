@@ -382,6 +382,73 @@ def add_cmyk_image(pdf: pikepdf.Pdf, page_index: int = 0, *, size_px: int = 64) 
     return xobj
 
 
+def build_dense_diagram_pdf(
+    path: Path, *, shapes: int = 9000, marker: str = "Confidential Diagram Label"
+) -> Path:
+    """A page whose content stream is one large, hand-built vector "diagram":
+    thousands of small, pastel, jittered rectangles on a normal-sized page,
+    plus one line of real text.
+
+    This stands in for a complex figure exported from a design tool — many
+    cheap, similarly-coloured shapes rather than a few large ones — sized to
+    exceed `compress`'s own flattening threshold on its own. Two properties
+    were tuned empirically against the real quality gate, not guessed at:
+    the per-shape jitter matters, since a perfectly regular grid is exactly
+    the repetitive text Flate alone already compresses about as well as an
+    image codec would, proving nothing about a real diagram's irregular
+    coordinates; and the pastel, low-contrast palette matters too — an
+    earlier, more saturated version of this fixture reliably failed
+    `compress`'s own quality gate on the flattened result (JPEG's block-based
+    encoding is a poor match for many small, sharp, high-contrast edges),
+    which correctly triggered a safe fallback but proved nothing about the
+    successful case this fixture exists to exercise.
+    """
+    import random as _random
+
+    rng = _random.Random(4)
+    palette = [
+        (0.80, 0.88, 0.98),
+        (0.98, 0.90, 0.82),
+        (0.85, 0.95, 0.85),
+        (0.97, 0.95, 0.80),
+        (0.90, 0.85, 0.95),
+    ]
+    columns = 45
+    cell = 12.0
+    page_width, page_height = 620.0, 900.0
+    rows = int((page_height - 40) // cell)
+    ops: list[str] = []
+    for index in range(shapes):
+        column, row = index % columns, (index // columns) % rows
+        x = 20 + column * cell + rng.uniform(-0.3, 0.3)
+        y = 20 + row * cell + rng.uniform(-0.3, 0.3)
+        r, g, b = palette[index % len(palette)]
+        r += rng.uniform(-0.015, 0.015)
+        g += rng.uniform(-0.015, 0.015)
+        b += rng.uniform(-0.015, 0.015)
+        w, h = cell - 1 + rng.uniform(-0.2, 0.2), cell - 1 + rng.uniform(-0.2, 0.2)
+        ops.append(f"{r:.4f} {g:.4f} {b:.4f} rg {x:.4f} {y:.4f} {w:.4f} {h:.4f} re f")
+
+    graphics = " ".join(ops)
+    text = f"BT /F1 14 Tf 40 40 Td ({marker}) Tj ET"
+    content = f"{graphics} {text}".encode()
+
+    pdf = pikepdf.Pdf.new()
+    page = pdf.add_blank_page(page_size=(page_width, page_height))
+    page.Contents = pikepdf.Stream(pdf, content)
+    font = pdf.make_indirect(
+        pikepdf.Dictionary(
+            Type=pikepdf.Name("/Font"),
+            Subtype=pikepdf.Name("/Type1"),
+            BaseFont=pikepdf.Name("/Helvetica"),
+        )
+    )
+    page.Resources = pikepdf.Dictionary(Font=pikepdf.Dictionary(F1=font))
+    pdf.save(path)
+    pdf.close()
+    return path
+
+
 @pytest.fixture
 def make_pdf(tmp_path: Path) -> PageMaker:
     """Factory fixture: ``make_pdf(5)`` gives a five-page document in tmp_path."""
