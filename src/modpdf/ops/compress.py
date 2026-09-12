@@ -158,8 +158,8 @@ LEVELS: dict[Level, LevelSettings] = {
         max_single_pixel_delta=verify_module.DEFAULT_MAX_SINGLE_PIXEL_DELTA,
     ),
     "high": LevelSettings(
-        target_dpi=100,
-        jpeg_quality=40,
+        target_dpi=130,
+        jpeg_quality=55,
         max_differing_fraction=0.45,
         max_single_pixel_delta=250,
         always_recompress=True,

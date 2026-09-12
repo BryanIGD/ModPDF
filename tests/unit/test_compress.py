@@ -398,7 +398,7 @@ class TestFlatteningComplexVectorPages:
         result.close()
 
         assert report.pages_flattened == 1
-        assert report.savings_ratio > 0.5
+        assert report.savings_ratio > 0.2
         assert not report.fell_back
 
         doc = pypdfium2.PdfDocument(str(out))
