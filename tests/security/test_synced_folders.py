@@ -15,7 +15,7 @@ from typer.testing import CliRunner
 
 from modpdf.cli import app
 from modpdf.security.fs import synced_location
-from tests.conftest import PageMaker
+from tests.conftest import PageMaker, plain_cli_output
 
 runner = CliRunner()
 
@@ -106,7 +106,7 @@ class TestTheWarningReachesTheUser:
         out = fake_home / "Dropbox" / "out.pdf"
         result = runner.invoke(app, ["reorder", str(source), "--order", "1", "-o", str(out)])
         assert result.exit_code == 0
-        assert "Dropbox will upload it" in result.output
+        assert "Dropbox will upload it" in plain_cli_output(result.output)
         assert out.exists(), "the file is still written; we warn, we do not refuse"
 
     def test_split_warns_about_the_output_directory(
@@ -116,14 +116,14 @@ class TestTheWarningReachesTheUser:
         out_dir = fake_home / "Dropbox" / "pieces"
         result = runner.invoke(app, ["split", str(source), "--every", "2", "-o", str(out_dir)])
         assert result.exit_code == 0
-        assert "Dropbox will upload it" in result.output
+        assert "Dropbox will upload it" in plain_cli_output(result.output)
 
     def test_merge_warns(self, fake_home: Path, make_pdf: PageMaker) -> None:
         first, second = make_pdf(2, name="a.pdf"), make_pdf(2, name="b.pdf")
         out = fake_home / "Dropbox" / "merged.pdf"
         result = runner.invoke(app, ["merge", str(first), str(second), "-o", str(out)])
         assert result.exit_code == 0
-        assert "Dropbox will upload it" in result.output
+        assert "Dropbox will upload it" in plain_cli_output(result.output)
 
     def test_no_warning_for_an_ordinary_destination(
         self, fake_home: Path, make_pdf: PageMaker, tmp_path: Path
@@ -133,4 +133,4 @@ class TestTheWarningReachesTheUser:
             app, ["reorder", str(source), "--order", "1", "-o", str(tmp_path / "out.pdf")]
         )
         assert result.exit_code == 0
-        assert "will upload" not in result.output
+        assert "will upload" not in plain_cli_output(result.output)

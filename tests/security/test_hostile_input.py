@@ -24,7 +24,7 @@ from modpdf.security.limits import (
     check_file_size,
     check_page_count,
 )
-from tests.conftest import PageMaker, build_hostile_pdf, build_pdf, page_markers
+from tests.conftest import PageMaker, build_hostile_pdf, build_pdf, page_markers, plain_cli_output
 
 runner = CliRunner()
 
@@ -90,8 +90,9 @@ class TestMalformedFiles:
         result = runner.invoke(
             app, ["reorder", str(source), "--order", "1", "-o", str(tmp_path / "o.pdf")]
         )
-        assert "is damaged" in result.output
-        assert "may be missing or altered" in result.output
+        output = plain_cli_output(result.output)
+        assert "is damaged" in output
+        assert "may be missing or altered" in output
 
     def test_inspect_reports_damage_as_a_concern(self, make_pdf: PageMaker, tmp_path: Path) -> None:
         from modpdf.inspection import inspect_document
@@ -209,7 +210,7 @@ class TestOddFilesystemInputs:
             app, ["reorder", str(tmp_path), "--order", "1", "-o", str(tmp_path / "o.pdf")]
         )
         assert result.exit_code == 1
-        assert "is a directory" in result.output
+        assert "is a directory" in plain_cli_output(result.output)
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX fifo")
     def test_a_fifo_is_refused_rather_than_read(self, tmp_path: Path) -> None:
@@ -226,7 +227,7 @@ class TestOddFilesystemInputs:
                 app, ["reorder", str(fifo), "--order", "1", "-o", str(tmp_path / "o.pdf")]
             )
             assert result.exit_code == 1
-            assert "not a regular file" in result.output
+            assert "not a regular file" in plain_cli_output(result.output)
 
 
 class TestDeeplyNestedStructures:

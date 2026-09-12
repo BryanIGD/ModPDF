@@ -18,7 +18,7 @@ from typer.testing import CliRunner
 from modpdf.cli import app
 from modpdf.document import EncryptedDocumentError, open_pdf
 from modpdf.security import secrets
-from tests.conftest import PageMaker, page_markers
+from tests.conftest import PageMaker, page_markers, plain_cli_output
 
 runner = CliRunner()
 PASSWORD = "hunter2"
@@ -41,7 +41,7 @@ class TestThereIsNoPasswordFlag:
     def test_no_command_accepts_a_password_as_an_argument(self) -> None:
         """A --password VALUE flag would expose the password through `ps`."""
         for command in ("split", "merge", "reorder", "inspect"):
-            help_text = runner.invoke(app, [command, "--help"]).output
+            help_text = plain_cli_output(runner.invoke(app, [command, "--help"]).output)
             assert "--password-stdin" in help_text or command == "merge"
             assert "--password TEXT" not in help_text
             assert "--password " not in help_text.replace("--password-stdin", "")
@@ -139,8 +139,9 @@ class TestCommandsOnEncryptedDocuments:
         monkeypatch.setenv(secrets.ENVIRONMENT_VARIABLE, PASSWORD)
         result = runner.invoke(app, ["inspect", str(locked)])
         assert result.exit_code == 0
-        assert "encrypted" in result.output
-        assert "Permissions" in result.output
+        output = plain_cli_output(result.output)
+        assert "encrypted" in output
+        assert "Permissions" in output
 
     def test_without_a_password_it_fails_cleanly(
         self, locked: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -150,5 +151,5 @@ class TestCommandsOnEncryptedDocuments:
             app, ["reorder", str(locked), "--order", "1", "-o", str(tmp_path / "o.pdf")]
         )
         assert result.exit_code == 1
-        assert "needs a password" in result.output
+        assert "needs a password" in plain_cli_output(result.output)
         assert not (tmp_path / "o.pdf").exists()

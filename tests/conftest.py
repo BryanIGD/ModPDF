@@ -11,29 +11,7 @@ nothing.
 from __future__ import annotations
 
 import os
-
-# Set before anything imports `modpdf.cli`: its Rich consoles re-measure the
-# terminal on every print, reading these same variables, so a test asserting
-# on captured CLI output would otherwise wrap and style differently depending
-# on whatever terminal (or lack of one) happens to be running the suite —
-# passing locally and failing in CI, or the reverse, for reasons that have
-# nothing to do with the code under test. This was a real, confirmed bug:
-# GitHub Actions sets FORCE_COLOR for its runners so tool output looks right
-# in the Actions log, which styled a `--help` flag's own name in the middle
-# ("--password-stdin" split by colour codes into separate runs), and a long
-# `tmp_path` wrapped an error message onto two lines mid-sentence — both
-# broke a substring assertion on captured output, only on that platform.
-#
-# NO_COLOR alone does not win: this Rich version gives FORCE_COLOR priority
-# over it, so the variable has to be removed outright, not merely overridden.
-# A fixed, wide, colourless terminal makes captured output deterministic; it
-# has no effect on a real user's actual terminal, which Rich still detects
-# normally outside the test suite.
-os.environ["COLUMNS"] = "200"
-os.environ["NO_COLOR"] = "1"
-os.environ.pop("FORCE_COLOR", None)
-os.environ.pop("CLICOLOR_FORCE", None)
-
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -43,6 +21,44 @@ import pypdfium2
 import pytest
 from reportlab.lib.pagesizes import LETTER
 from reportlab.pdfgen import canvas
+
+# Set before anything imports `modpdf.cli`: its Rich consoles re-measure the
+# terminal on every print, so a test asserting on captured CLI output would
+# otherwise wrap and style differently depending on whatever terminal (or
+# lack of one) happens to be running the suite. This was a real, confirmed
+# bug, not a hypothetical: GitHub Actions' runners wrapped a long `tmp_path`
+# error message onto two lines that a real terminal would not have, breaking
+# a substring assertion. A wide terminal here avoids that.
+#
+# It does not, on its own, stop every runner from styling output — Rich has
+# its own reasons to decide a CI environment can render ANSI, and no
+# combination of NO_COLOR/FORCE_COLOR/CLICOLOR_FORCE reliably overrides that
+# in every version. `plain_cli_output` below is the actual fix for styling;
+# this is only for width. Safe to set from here even though this module
+# doesn't import `modpdf.cli` itself: conftest.py is always collected before
+# any test module, so this still runs first.
+os.environ["COLUMNS"] = "200"
+os.environ["NO_COLOR"] = "1"
+os.environ.pop("FORCE_COLOR", None)
+os.environ.pop("CLICOLOR_FORCE", None)
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def plain_cli_output(text: str) -> str:
+    """Strip ANSI styling and collapse whitespace from captured CLI output.
+
+    Rich may style or wrap a command's output differently depending on
+    whether the terminal running the suite is real, how wide it is, or
+    whether the environment (GitHub Actions' runners, for one) makes Rich
+    decide it can render color anyway. A test asserting a flag's name or a
+    phrase appears in that output needs to survive all of that, since none
+    of it is what the test is actually about — use this rather than
+    asserting on `result.output` directly whenever the check is "does this
+    text appear," not "does this text render a particular way."
+    """
+    return " ".join(_ANSI.sub("", text).split())
+
 
 PageMaker = Callable[..., Path]
 

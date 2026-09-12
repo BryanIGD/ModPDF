@@ -13,7 +13,7 @@ import pytest
 from typer.testing import CliRunner, Result
 
 from modpdf.cli import app
-from tests.conftest import PageMaker, page_markers
+from tests.conftest import PageMaker, page_markers, plain_cli_output
 
 runner = CliRunner()
 
@@ -66,7 +66,7 @@ class TestSplit:
         neither = run("split", source, "-o", tmp_path / "o")
         assert both.exit_code == 1
         assert neither.exit_code == 1
-        assert "exactly one" in both.output
+        assert "exactly one" in plain_cli_output(both.output)
 
 
 class TestMerge:
@@ -81,7 +81,7 @@ class TestMerge:
     def test_refuses_a_single_file(self, make_pdf: PageMaker, tmp_path: Path) -> None:
         result = run("merge", make_pdf(3), "-o", tmp_path / "merged.pdf")
         assert result.exit_code == 1
-        assert "at least two" in result.output
+        assert "at least two" in plain_cli_output(result.output)
 
 
 class TestReorder:
@@ -106,7 +106,7 @@ class TestReorder:
     def test_warns_when_pages_are_dropped(self, make_pdf: PageMaker, tmp_path: Path) -> None:
         result = run("reorder", make_pdf(10), "--order", "1-3", "-o", tmp_path / "o.pdf")
         assert result.exit_code == 0
-        assert "dropped" in result.output
+        assert "dropped" in plain_cli_output(result.output)
 
 
 class TestFailureIsSafe:
@@ -117,7 +117,7 @@ class TestFailureIsSafe:
 
         result = run("reorder", source, "--order", "1", "-o", out)
         assert result.exit_code == 1
-        assert "already exists" in result.output
+        assert "already exists" in plain_cli_output(result.output)
         assert out.read_bytes() == b"not a pdf, but precious"
 
     def test_force_overwrites(self, make_pdf: PageMaker, tmp_path: Path) -> None:
@@ -130,14 +130,14 @@ class TestFailureIsSafe:
     def test_missing_input_is_a_clean_error(self, tmp_path: Path) -> None:
         result = run("reorder", tmp_path / "ghost.pdf", "--order", "1", "-o", tmp_path / "o.pdf")
         assert result.exit_code == 1
-        assert "no such file" in result.output
+        assert "no such file" in plain_cli_output(result.output)
 
     def test_not_a_pdf_is_a_clean_error(self, tmp_path: Path) -> None:
         junk = tmp_path / "junk.pdf"
         junk.write_bytes(b"this is not a PDF at all")
         result = run("reorder", junk, "--order", "1", "-o", tmp_path / "o.pdf")
         assert result.exit_code == 1
-        assert "cannot read" in result.output
+        assert "cannot read" in plain_cli_output(result.output)
 
     def test_page_out_of_range_leaves_no_output(self, make_pdf: PageMaker, tmp_path: Path) -> None:
         out = tmp_path / "o.pdf"
@@ -149,14 +149,14 @@ class TestFailureIsSafe:
 def test_version() -> None:
     result = run("--version")
     assert result.exit_code == 0
-    assert "modpdf" in result.output
+    assert "modpdf" in plain_cli_output(result.output)
 
 
 class TestInspect:
     def test_reports_a_clean_document(self, make_pdf: PageMaker) -> None:
         result = run("inspect", make_pdf(3))
         assert result.exit_code == 0
-        assert "3 pages" in result.output
+        assert "3 pages" in plain_cli_output(result.output)
 
     def test_flags_a_hostile_document(self, tmp_path: Path) -> None:
         from tests.conftest import build_hostile_pdf
@@ -164,8 +164,9 @@ class TestInspect:
         source = build_hostile_pdf(tmp_path / "hostile.pdf")
         result = run("inspect", source)
         assert result.exit_code == 0
-        assert "JavaScript" in result.output
-        assert "Embedded files" in result.output
+        output = plain_cli_output(result.output)
+        assert "JavaScript" in output
+        assert "Embedded files" in output
 
     def test_json_output_is_parseable(self, tmp_path: Path) -> None:
         import json
@@ -195,8 +196,9 @@ class TestSanitize:
         result = run("sanitize", source, "-o", out)
 
         assert result.exit_code == 0
-        assert "removed:" in result.output
-        assert "JavaScript" in result.output
+        output = plain_cli_output(result.output)
+        assert "removed:" in output
+        assert "JavaScript" in output
         assert page_markers(out) == [1, 2, 3]
         assert b"app.alert" not in out.read_bytes()
 
@@ -206,14 +208,14 @@ class TestSanitize:
         run("sanitize", source, "-o", once)
         result = run("sanitize", once, "-o", tmp_path / "twice.pdf")
         assert result.exit_code == 0
-        assert "already clean" in result.output
+        assert "already clean" in plain_cli_output(result.output)
 
     def test_warns_that_it_is_not_redaction(self, tmp_path: Path) -> None:
         from tests.conftest import build_hostile_pdf
 
         source = build_hostile_pdf(tmp_path / "hostile.pdf")
         result = run("sanitize", source, "-o", tmp_path / "clean.pdf")
-        assert "not redaction" in result.output
+        assert "not redaction" in plain_cli_output(result.output)
 
     def test_will_not_overwrite_without_force(self, make_pdf: PageMaker, tmp_path: Path) -> None:
         source = make_pdf(2)
@@ -233,8 +235,9 @@ class TestCompress:
         result = run("compress", source, "-o", out)
 
         assert result.exit_code == 0
-        assert "smaller" in result.output
-        assert "PASS" in result.output
+        output = plain_cli_output(result.output)
+        assert "smaller" in output
+        assert "PASS" in output
         assert out.stat().st_size < source.stat().st_size
 
     def test_lossless_never_touches_images(self, tmp_path: Path) -> None:
@@ -245,7 +248,8 @@ class TestCompress:
         result = run("compress", source, "-o", out, "--lossless")
 
         assert result.exit_code == 0
-        assert "images" not in result.output  # nothing to report: none were touched
+        # nothing to report: none were touched
+        assert "images" not in plain_cli_output(result.output)
 
     def test_an_unreasonable_target_falls_back_and_says_so(self, tmp_path: Path) -> None:
         from tests.conftest import build_scan_pdf
@@ -255,7 +259,7 @@ class TestCompress:
         result = run("compress", source, "-o", out, "--target-dpi", "15")
 
         assert result.exit_code == 0
-        assert "fell back to lossless" in result.output
+        assert "fell back to lossless" in plain_cli_output(result.output)
 
     def test_pages_survive(self, tmp_path: Path) -> None:
         from tests.conftest import build_photo_pdf
