@@ -17,12 +17,20 @@ really is atomic.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["FileSystemError", "atomic_write", "resolve_input"]
+__all__ = [
+    "FileSystemError",
+    "SyncedLocation",
+    "atomic_write",
+    "resolve_input",
+    "synced_location",
+]
 
 
 class FileSystemError(Exception):
@@ -95,8 +103,14 @@ def atomic_write(destination: Path, *, overwrite: bool = False) -> Iterator[Path
 
 
 def _flush_to_disk(path: Path) -> None:
-    """Force the file's contents out of the OS cache before we rename it."""
-    handle = os.open(path, os.O_RDONLY)
+    """Force the file's contents out of the OS cache before we rename it.
+
+    Opened for writing rather than reading, which looks redundant and is not:
+    Windows implements fsync as _commit, which needs a writable handle and
+    fails with EBADF on a read-only one. POSIX does not care either way. We
+    created this file ourselves with mode 0600, so the access is ours to take.
+    """
+    handle = os.open(path, os.O_RDWR)
     try:
         os.fsync(handle)
     finally:
@@ -120,3 +134,130 @@ def _flush_directory(path: Path) -> None:
         pass
     finally:
         os.close(handle)
+
+
+@dataclass(frozen=True)
+class SyncedLocation:
+    """A cloud-sync folder, and the service that would upload what lands in it."""
+
+    service: str
+    root: Path
+
+
+# Where the major services put their folders. Names are matched against the
+# directory itself, since providers append the account to it — a Google Drive
+# folder is "GoogleDrive-someone@example.com", and we report "Google Drive"
+# rather than repeating somebody's email address back at them.
+_HOME_FOLDER_NAMES = (
+    "Dropbox",
+    "Google Drive",
+    "OneDrive",
+    "Box Sync",
+    "Insync",
+    "pCloud Drive",
+    "Nextcloud",
+    "Sync",
+    "MEGA",
+    "Tresorit",
+)
+
+
+def synced_location(path: Path) -> SyncedLocation | None:
+    """Return the cloud-sync folder this path lives in, if it is in one.
+
+    This exists because "your documents never leave your computer" is simply
+    false if the output lands in a Dropbox folder. The document would be
+    uploaded within seconds — not by us, but the user's confidentiality is gone
+    either way, and they would have no reason to suspect it. So we look, and we
+    say so.
+
+    Detection is by location, which catches the standard case and is honest
+    about what it cannot catch: a service configured to mirror an arbitrary
+    folder — Google Drive can be told to sync ~/Documents itself — leaves no
+    trace in the path, and this will not see it. A warning that appears is
+    reliable; the absence of one is not proof of anything.
+    """
+    try:
+        resolved = path.expanduser().resolve()
+    except OSError:
+        return None
+
+    for service, root in _sync_roots():
+        if resolved == root or resolved.is_relative_to(root):
+            return SyncedLocation(service=service, root=root)
+    return None
+
+
+def _sync_roots() -> list[tuple[str, Path]]:
+    """Every cloud-sync folder we can find for the current user."""
+    home = Path.home()
+    roots: list[tuple[str, Path]] = []
+
+    # macOS puts iCloud Drive here, under a name no one would guess.
+    icloud = home / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
+    if icloud.is_dir():
+        roots.append(("iCloud Drive", icloud))
+
+    # Since Big Sur, third-party providers live under one directory as File
+    # Provider extensions, one subdirectory per connected account.
+    cloud_storage = home / "Library" / "CloudStorage"
+    if cloud_storage.is_dir():
+        try:
+            for entry in sorted(cloud_storage.iterdir()):
+                if entry.is_dir():
+                    roots.append((_service_name(entry.name), entry))
+        except OSError:
+            pass
+
+    # The traditional layout, still used on Linux and Windows and by older
+    # macOS installations.
+    for name in _HOME_FOLDER_NAMES:
+        candidate = home / name
+        if candidate.is_dir():
+            roots.append((name, candidate))
+
+    # OneDrive appends the tenant: "OneDrive - Contoso".
+    try:
+        for candidate in sorted(home.glob("OneDrive*")):
+            if candidate.is_dir() and ("OneDrive", candidate) not in roots:
+                roots.append(("OneDrive", candidate))
+    except OSError:
+        pass
+
+    return roots
+
+
+# How each provider spells its own name. Splitting camel case automatically
+# gets "GoogleDrive" right and "OneDrive" wrong, and a tool that misspells a
+# product name in a security warning looks careless at the worst moment.
+_SERVICE_NAMES = {
+    "googledrive": "Google Drive",
+    "onedrive": "OneDrive",
+    "dropbox": "Dropbox",
+    "box": "Box",
+    "icloud": "iCloud Drive",
+    "pcloud": "pCloud",
+    "nextcloud": "Nextcloud",
+    "owncloud": "ownCloud",
+    "mega": "MEGA",
+    "protondrive": "Proton Drive",
+    "tresorit": "Tresorit",
+    "sync.com": "Sync.com",
+    "insync": "Insync",
+}
+
+
+def _service_name(directory_name: str) -> str:
+    """Turn a provider directory name into something worth showing a person.
+
+    "GoogleDrive-someone@example.com" becomes "Google Drive". The account is
+    dropped deliberately: it is not needed to make the point, and echoing
+    somebody's email address into terminal output is its own small leak.
+    """
+    base = directory_name.split("-", 1)[0].strip()
+    known = _SERVICE_NAMES.get(base.lower())
+    if known:
+        return known
+    # Unknown provider: fall back to splitting camel case, which is right more
+    # often than it is wrong, and better than showing the raw directory name.
+    return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", base) or directory_name
