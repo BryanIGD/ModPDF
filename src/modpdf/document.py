@@ -8,7 +8,7 @@ concerns here means an operation module can be about the operation.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import cast
@@ -16,6 +16,7 @@ from typing import cast
 import pikepdf
 
 from modpdf.security.fs import atomic_write, resolve_input
+from modpdf.security.limits import DEFAULT_LIMITS, Limits, check_file_size, check_page_count
 
 __all__ = [
     "DamagedDocumentError",
@@ -40,7 +41,13 @@ class DamagedDocumentError(DocumentError):
 
 
 @contextmanager
-def open_pdf(path: Path, *, password: str | None = None) -> Iterator[pikepdf.Pdf]:
+def open_pdf(
+    path: Path,
+    *,
+    password: str | None = None,
+    limits: Limits = DEFAULT_LIMITS,
+    on_damage: Callable[[list[str]], None] | None = None,
+) -> Iterator[pikepdf.Pdf]:
     """Open a PDF for reading, closing it again on the way out.
 
     Args:
@@ -55,18 +62,35 @@ def open_pdf(path: Path, *, password: str | None = None) -> Iterator[pikepdf.Pdf
         FileSystemError: The path is missing, unreadable, or not a regular file.
     """
     resolved = resolve_input(path)
+    check_file_size(resolved, limits)
 
     try:
         pdf = pikepdf.open(resolved, password=password or "")
     except pikepdf.PasswordError:
-        detail = "the password is wrong" if password else "it needs a password"
-        raise EncryptedDocumentError(
-            f"cannot open {path.name}: {detail}. Supply one with --password-stdin."
-        ) from None
+        # Only suggest how to supply a password when one was not already tried.
+        if password:
+            message = f"cannot open {path.name}: the password is wrong"
+        else:
+            message = (
+                f"cannot open {path.name}: it is encrypted and needs a password. "
+                f"Supply one with --password-stdin or the MODPDF_PASSWORD variable."
+            )
+        raise EncryptedDocumentError(message) from None
     except pikepdf.PdfError as exc:
         raise DamagedDocumentError(f"cannot read {path.name} as a PDF: {exc}") from exc
+    except OSError as exc:
+        # QPDF reports some malformed files through errno rather than its own
+        # exception type — a bare "%PDF-" header with nothing after it arrives
+        # as EINVAL. Without this, a crafted file gets a traceback instead of
+        # an error message.
+        raise DamagedDocumentError(f"cannot read {path.name} as a PDF: {exc.strerror}") from exc
 
     try:
+        check_page_count(len(pdf.pages), limits)
+        if on_damage is not None:
+            repairs = [_repair_message(warning, resolved) for warning in pdf.get_warnings()]
+            if repairs:
+                on_damage(repairs)
         yield pdf
     finally:
         pdf.close()
@@ -103,3 +127,24 @@ def carry_metadata(source: pikepdf.Pdf, target: pikepdf.Pdf) -> None:
     xmp = source.Root.get("/Metadata")
     if xmp is not None:
         target.Root["/Metadata"] = target.copy_foreign(xmp)
+
+
+def _repair_message(warning: object, path: Path) -> str:
+    """Tidy one QPDF warning for display.
+
+    QPDF prefixes every warning with the full path of the file, which is both
+    noisy when several are printed together and an unnecessary way to spill a
+    filesystem path into terminal output.
+    """
+    text = str(warning)
+    for prefix in (str(path), path.name):
+        if not text.startswith(prefix):
+            continue
+        # QPDF writes either "<path>: message" or, when it can place the fault,
+        # "<path> (object 16 0, offset 2749): message". The object context is
+        # worth keeping; the path is not.
+        text = text[len(prefix) :].lstrip()
+        if text.startswith(":"):
+            text = text[1:].lstrip()
+        return text
+    return text

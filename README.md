@@ -1,13 +1,16 @@
 # ModPDF
 
 Split, merge, reorder and compress PDFs on your own machine. Your documents are
-never uploaded anywhere, because there is no code in this program that could
-upload them.
+never uploaded anywhere, and the program goes further than promising that: at
+startup it removes its own ability to open a network socket, so a network call
+cannot happen by accident, through a dependency, or through a future version of
+this program written by someone who forgot.
 
-The intended end state is stronger than that: the process will block its own
-ability to open a socket at all, so the claim can be tested rather than taken
-on trust. That guard is specified and is the next thing being built — see
-Status below, which is kept accurate about what actually runs today.
+That is a claim you can check rather than trust. `tests/security/` asserts that
+sockets, DNS lookups and HTTP requests all raise, that real PDF work still
+succeeds while they are raising, and that the command-line entry point turns the
+guard on. CI runs the whole suite a second time inside a network namespace with
+no interfaces at all.
 
 ## Why this exists
 
@@ -25,9 +28,9 @@ ModPDF is the boring, local version. Your files stay where they are.
 
 ## Status
 
-Early development, and honest about it: the build plan has seven phases and
-this is the end of Phase 1. Three commands work. Compression, which is the
-interesting one, does not exist yet.
+Early development. Phases 1 and 2 of seven are done: the three page operations
+work, and the security layer they rest on is built and tested. Compression,
+which is the interesting one, does not exist yet.
 
 There is no release to install. Everything below is real output from the
 commands as they currently run.
@@ -43,7 +46,7 @@ $ modpdf split report.pdf --every 10 -o chapters/
 ```
 
 Each comma-separated group in `--pages` becomes its own file, and `--dry-run`
-shows you the plan before anything is written:
+shows the plan before anything is written:
 
 ```
 $ modpdf split report.pdf --pages 1-5,20- -o parts/ --dry-run
@@ -70,38 +73,90 @@ $ modpdf reorder report.pdf --order -1,1-3 -o summary.pdf
 Page numbers work the way a print dialog works: they start at 1, ranges include
 both ends, `12-` means "page 12 to the end", and `-1` is the last page.
 
-Mistakes are refused rather than guessed at:
+### Finding out what is in a document
+
+`inspect` answers the question worth asking before you forward a file: what is
+in here besides the pages I can see? It reads and changes nothing.
 
 ```
-$ modpdf reorder report.pdf --order 99 -o bad.pdf
-error: '99' refers to page 99, but the document has 23 pages
+$ modpdf inspect statement.pdf
+statement.pdf
+  3 pages · 3.1 KB · PDF 1.3 · not encrypted
+
+  8 things worth knowing:
+
+  JavaScript — 1 script entry
+    PDF JavaScript can run when the file is opened. It is the most common
+    way a PDF is used to attack the person reading it.
+  Opens automatically — an /OpenAction is set
+    Something is set to happen the moment the document is opened, without
+    the reader choosing it.
+  Launch action — 1 occurrence
+    asks your PDF reader to run a program on your computer
+  Embedded files — 1: payroll.xlsx
+    Whole files are bundled inside this PDF and travel with it. They do not
+    appear on any page.
+  ...
 ```
 
-Along the way, some things that are easy to get wrong and that ModPDF gets
-right:
+It also reports **earlier revisions**, which is the one that catches out law
+firms and governments: many editors save by appending changes rather than
+rewriting the file, so previous drafts stay inside it and text that looks
+deleted is still recoverable. `--json` gives the same information for scripts.
+
+### Removing it
+
+```
+$ modpdf sanitize statement.pdf -o safe.pdf
+safe.pdf 3 pages
+  removed: JavaScript (1), automatic open action, Launch actions (1),
+  embedded files (1), XFA form, metadata
+  Pages and text are unchanged. This is not redaction:
+  anything visible on a page is still there.
+```
+
+`sanitize` rebuilds the document from its pages rather than deleting references,
+because unlinking a piece of JavaScript leaves it in the file and fully
+recoverable. The payload bytes are absent from the output, and there is a test
+that greps for them to prove it.
+
+Plain web links are kept by default, since a citation in a report is content and
+the reader has to click it. Actions that fire on their own or execute code are
+not. `--strip-links` removes links too.
+
+### Things that are easy to get wrong, and are handled
 
 - **Bookmarks survive.** Splitting a report rebuilds each piece's outline
-  against its new page numbers. Entries whose page ended up in a different
-  piece are dropped; entries whose *parent* heading was dropped are promoted
-  rather than deleted along with it, so you do not lose a chapter's worth of
-  navigation over one missing heading.
-- **Metadata survives**, because reordering two pages should not silently erase
-  a document's title. Stripping metadata will be an explicit choice, which is
-  what `sanitize` is for.
-- **Nothing is half-written.** Output is staged beside its destination and
-  moved into place atomically. Interrupt it and you have either the old file or
-  no file, never a truncated PDF that opens far enough to look fine.
-- **Output is private.** Files are created mode `0600` and split directories
-  `0700`, so pieces of a confidential document are not left readable by other
-  accounts on the machine.
-- **Existing files are never overwritten** unless you pass `--force`.
+  against its new page numbers. Entries whose parent heading ended up in a
+  different piece are promoted rather than deleted with it, so you do not lose a
+  chapter's worth of navigation over one missing heading.
+- **Metadata survives** ordinary operations, because reordering two pages should
+  not silently erase a document's title. Removing it is what `sanitize` is for.
+- **Damage is reported.** QPDF quietly repairs a malformed PDF and usually does
+  it well, but a recovered file can be missing content. ModPDF tells you:
+  `warning: statement.pdf is damaged. It was repaired well enough to read, but
+  content may be missing or altered (9 issues).`
+- **Cloud folders are called out.** "Your documents never leave your computer"
+  is false if the output lands in Dropbox. ModPDF resolves the destination and
+  says so — it still writes the file, it just declines to let you believe
+  something untrue.
+- **Passwords never touch the command line.** There is no `--password VALUE`
+  flag, because arguments are visible to every process on the machine through
+  `ps` and land in your shell history. Use `--password-stdin` or
+  `MODPDF_PASSWORD`.
+- **Nothing is half-written.** Output is staged beside its destination and moved
+  into place atomically, at mode `0600`, with split directories at `0700`.
+  Interrupt it and you have either the old file or no file.
+- **Hostile input fails safely.** Malformed, truncated, empty and
+  wrong-type files are refused with a clear message and no partial output.
 
 ## Not built yet
 
-`compress`, `inspect` and `sanitize`. The enforced no-network guard is
-specified and tested for in the plan but not yet implemented — so for now, the
-"it cannot phone home" claim rests on there being no network code, which is
-weaker than what is intended and worth saying plainly.
+`compress`, and the verification harness it depends on. Also absent on purpose:
+subprocess isolation and a wall-clock timeout. A timeout that cannot interrupt
+work already running inside a native library would silently fail to fire, and
+shipping one would be worse than having none — so there is none until the work
+runs in its own process.
 
 ## What it will not do
 

@@ -150,3 +150,75 @@ def test_version() -> None:
     result = run("--version")
     assert result.exit_code == 0
     assert "modpdf" in result.output
+
+
+class TestInspect:
+    def test_reports_a_clean_document(self, make_pdf: PageMaker) -> None:
+        result = run("inspect", make_pdf(3))
+        assert result.exit_code == 0
+        assert "3 pages" in result.output
+
+    def test_flags_a_hostile_document(self, tmp_path: Path) -> None:
+        from tests.conftest import build_hostile_pdf
+
+        source = build_hostile_pdf(tmp_path / "hostile.pdf")
+        result = run("inspect", source)
+        assert result.exit_code == 0
+        assert "JavaScript" in result.output
+        assert "Embedded files" in result.output
+
+    def test_json_output_is_parseable(self, tmp_path: Path) -> None:
+        import json
+
+        from tests.conftest import build_hostile_pdf
+
+        source = build_hostile_pdf(tmp_path / "hostile.pdf")
+        result = run("inspect", source, "--json")
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["page_count"] == 3
+        assert payload["javascript"] >= 1
+
+    def test_it_does_not_modify_the_document(self, make_pdf: PageMaker) -> None:
+        source = make_pdf(4)
+        before = source.read_bytes()
+        assert run("inspect", source).exit_code == 0
+        assert source.read_bytes() == before
+
+
+class TestSanitize:
+    def test_cleans_and_reports(self, tmp_path: Path) -> None:
+        from tests.conftest import build_hostile_pdf
+
+        source = build_hostile_pdf(tmp_path / "hostile.pdf")
+        out = tmp_path / "clean.pdf"
+        result = run("sanitize", source, "-o", out)
+
+        assert result.exit_code == 0
+        assert "removed:" in result.output
+        assert "JavaScript" in result.output
+        assert page_markers(out) == [1, 2, 3]
+        assert b"app.alert" not in out.read_bytes()
+
+    def test_says_so_when_there_is_nothing_to_do(self, make_pdf: PageMaker, tmp_path: Path) -> None:
+        source = make_pdf(2)
+        once = tmp_path / "once.pdf"
+        run("sanitize", source, "-o", once)
+        result = run("sanitize", once, "-o", tmp_path / "twice.pdf")
+        assert result.exit_code == 0
+        assert "already clean" in result.output
+
+    def test_warns_that_it_is_not_redaction(self, tmp_path: Path) -> None:
+        from tests.conftest import build_hostile_pdf
+
+        source = build_hostile_pdf(tmp_path / "hostile.pdf")
+        result = run("sanitize", source, "-o", tmp_path / "clean.pdf")
+        assert "not redaction" in result.output
+
+    def test_will_not_overwrite_without_force(self, make_pdf: PageMaker, tmp_path: Path) -> None:
+        source = make_pdf(2)
+        out = tmp_path / "clean.pdf"
+        out.write_bytes(b"precious")
+        result = run("sanitize", source, "-o", out)
+        assert result.exit_code == 1
+        assert out.read_bytes() == b"precious"
