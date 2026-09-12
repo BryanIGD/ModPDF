@@ -1,0 +1,20 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      # This is a privacy tool. A stray real document in a commit would be
+      # embarrassing at best, so keep the size ceiling low.
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
