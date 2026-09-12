@@ -1,0 +1,46 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Dependencies pick up CVEs while nobody is pushing. Check weekly.
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install
+        run: uv sync --locked --all-groups
+
+      - name: Known vulnerabilities in dependencies
+        run: uv run pip-audit --strict --desc
+
+      - name: Static analysis of our own code
+        run: uv run bandit -r src/ -c pyproject.toml
+
+  # An independent check on the no-network promise. netguard blocks sockets
+  # inside the process; this blocks them outside it. If a dependency starts
+  # phoning home, one of the two will catch it.
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install
+        run: uv sync --locked --all-groups
+
+      # Run the suite inside a network namespace with no interfaces but
+      # loopback. Firewalling the whole runner would also cut its own link to
+      # GitHub, so the job could never report what it found.
+      - name: Tests must pass with no network at all
+        run: sudo unshare --net .venv/bin/python -m pytest -v

@@ -1,0 +1,101 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "modpdf"
+version = "0.1.0"
+description = "Split, merge, reorder and compress PDFs entirely on your own machine."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "ModPDF contributors" }]
+keywords = ["pdf", "privacy", "offline", "split", "merge", "compress"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Utilities",
+]
+
+# Five dependencies, each load-bearing. See docs/adr/ before adding a sixth.
+dependencies = [
+    "pikepdf>=9.4",     # QPDF bindings: the PDF object model
+    "pypdfium2>=4.30",  # page rendering, for the compression quality gate
+    "pillow>=11.0",     # image decode / resample / encode
+    "typer>=0.15",      # CLI
+    "rich>=13.9",       # reports and progress
+]
+
+[project.scripts]
+modpdf = "modpdf.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "hypothesis>=6.122",
+    "mypy>=1.14",
+    "ruff>=0.9",
+    "reportlab>=4.2",   # generates test PDFs so no real document is ever committed
+    "pip-audit>=2.7",
+    "bandit>=1.8",
+    "pre-commit>=4.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/modpdf"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "N",        # pep8-naming
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "A",        # shadowed builtins
+    "C4",       # comprehensions
+    "PTH",      # use pathlib
+    "RUF",      # ruff-specific
+    "S",        # bandit-style security checks
+]
+ignore = [
+    "S101",  # assert is fine in tests, and we use it as an invariant marker
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "N802"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+# These ship incomplete or absent type information.
+module = ["pikepdf.*", "pypdfium2.*", "reportlab.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --strict-config"
+markers = [
+    "slow: takes more than a second (deselect with '-m \"not slow\"')",
+    "corpus: requires the downloaded test corpus",
+]
+
+[tool.coverage.run]
+source = ["src/modpdf"]
+branch = true

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.hypothesis/
+
+# Test corpus downloaded by scripts/fetch_corpus.py — never committed
+tests/fixtures/corpus/
+
+# Never commit real documents. This is a privacy tool; treat it like one.
+*.pdf
+!tests/fixtures/generated/*.pdf
+
+# OS
+.DS_Store
