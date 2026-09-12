@@ -21,7 +21,7 @@ from rich.console import Console
 from modpdf import __version__, tasks
 from modpdf.document import DocumentError, EncryptedDocumentError
 from modpdf.inspection import Inspection
-from modpdf.ops.compress import DEFAULT_TARGET_DPI, CompressReport, Mode
+from modpdf.ops.compress import DEFAULT_LEVEL, CompressReport, Level, Mode
 from modpdf.ops.sanitize import SanitizeReport
 from modpdf.ops.split import Piece, chunks, plan_pieces
 from modpdf.pagespec import PageSpecError, parse_pagespec, parse_pagespec_groups
@@ -447,10 +447,15 @@ def compress(
         bool,
         typer.Option("--lossless", help="Structural cleanup only. Not one pixel or glyph changes."),
     ] = False,
-    target_dpi: Annotated[
-        int,
-        typer.Option("--target-dpi", help="Downsample images above this effective resolution."),
-    ] = DEFAULT_TARGET_DPI,
+    level: Annotated[
+        Level,
+        typer.Option(
+            "--level",
+            help="How hard to compress: 'low' (best quality), 'balanced' (default), "
+            "or 'high' (smallest file; photos may look visibly softer). "
+            "Meaningless with --lossless.",
+        ),
+    ] = DEFAULT_LEVEL,
     no_verify: Annotated[
         bool,
         typer.Option(
@@ -463,18 +468,25 @@ def compress(
         bool, typer.Option("--password-stdin", help="Read the document password from stdin.")
     ] = False,
 ) -> None:
-    """Shrink a PDF. Images above --target-dpi are downsampled; text and
-    vector content are never touched.
+    """Shrink a PDF. Oversized images are downsampled; text and vector content
+    are never touched.
 
-    A text-only document will not shrink much — there is no image data to
-    recompress, and the structural cleanup this still does is usually a small
-    fraction of the file. Real savings come from oversized scanned images.
+    --level picks how hard to push that downsampling: 'low' barely touches
+    anything, 'balanced' (the default) is a sensible middle ground, and 'high'
+    trades some visible quality for the smallest file, closer to what other
+    tools call "extreme" compression.
+
+    A text-only document will not shrink much either way — there is no image
+    data to recompress, and the structural cleanup this still does is usually
+    a small fraction of the file. Real savings come from oversized scanned
+    images.
 
     Every compressed page is checked against the original before being
     accepted. If any page looks different enough to matter, the whole
     document falls back to the lossless result instead, and the report says
     so — the worst case is a file smaller than hoped for, never one that
-    looks worse.
+    looks worse. ('high' accepts more visible difference before falling back;
+    that is its whole point.)
     """
     with reporting():
         warn_if_synced(output)
@@ -485,7 +497,7 @@ def compress(
                 source,
                 output,
                 mode=mode,
-                target_dpi=target_dpi,
+                level=level,
                 verify=not no_verify,
                 password=password,
                 overwrite=force,
@@ -494,10 +506,10 @@ def compress(
             return report
 
         report = with_password(source, password_stdin, do_compress)
-        _print_compress_report(report, output)
+        _print_compress_report(report, output, level)
 
 
-def _print_compress_report(report: CompressReport, output: Path) -> None:
+def _print_compress_report(report: CompressReport, output: Path, level: Level) -> None:
     out.print(
         f"{output.name}  {_human_size(report.before_bytes)} → "
         f"{_human_size(report.after_bytes)}  [dim]({report.savings_ratio * 100:.0f}% smaller)[/dim]"
@@ -523,6 +535,12 @@ def _print_compress_report(report: CompressReport, output: Path) -> None:
         out.print(
             f"  quality    text identical · largest visible difference "
             f"{v.differing_fraction * 100:.1f}% of one page   [green]PASS[/green]"
+        )
+
+    if level == "high" and report.mode_used == "visual":
+        out.print(
+            "  [yellow]note[/yellow]       maximum compression: image quality was "
+            "reduced on purpose to shrink the file further"
         )
 
 

@@ -251,15 +251,43 @@ class TestCompress:
         # nothing to report: none were touched
         assert "images" not in plain_cli_output(result.output)
 
-    def test_an_unreasonable_target_falls_back_and_says_so(self, tmp_path: Path) -> None:
-        from tests.conftest import build_scan_pdf
+    def test_level_high_shrinks_more_than_the_default(self, tmp_path: Path) -> None:
+        """--level high exists to trade more quality for more size than the
+        default "balanced" tier; a fallback demonstration belongs in
+        test_compress.py, against `compress()`'s own `target_dpi` — the three
+        levels are deliberately vetted presets, not an open-ended dial a user
+        could point at an unreasonable value."""
+        from tests.conftest import build_photo_pdf
 
-        source = build_scan_pdf(tmp_path / "scan.pdf")
-        out = tmp_path / "out.pdf"
-        result = run("compress", source, "-o", out, "--target-dpi", "15")
+        source = build_photo_pdf(tmp_path / "photo.pdf")
+        balanced_out = tmp_path / "balanced.pdf"
+        high_out = tmp_path / "high.pdf"
 
-        assert result.exit_code == 0
-        assert "fell back to lossless" in plain_cli_output(result.output)
+        assert run("compress", source, "-o", balanced_out).exit_code == 0
+        assert run("compress", source, "-o", high_out, "--level", "high").exit_code == 0
+
+        assert high_out.stat().st_size < balanced_out.stat().st_size
+
+    def test_level_high_warns_that_quality_was_traded_away(self, tmp_path: Path) -> None:
+        from tests.conftest import build_photo_pdf
+
+        source = build_photo_pdf(tmp_path / "photo.pdf")
+        result = run("compress", source, "-o", tmp_path / "out.pdf", "--level", "high")
+        assert "reduced on purpose" in plain_cli_output(result.output)
+
+    def test_the_default_level_does_not_warn_about_that(self, tmp_path: Path) -> None:
+        from tests.conftest import build_photo_pdf
+
+        source = build_photo_pdf(tmp_path / "photo.pdf")
+        result = run("compress", source, "-o", tmp_path / "out.pdf")
+        assert "reduced on purpose" not in plain_cli_output(result.output)
+
+    def test_an_unrecognised_level_is_rejected(self, tmp_path: Path) -> None:
+        from tests.conftest import build_photo_pdf
+
+        source = build_photo_pdf(tmp_path / "photo.pdf")
+        result = run("compress", source, "-o", tmp_path / "out.pdf", "--level", "extreme")
+        assert result.exit_code != 0
 
     def test_pages_survive(self, tmp_path: Path) -> None:
         from tests.conftest import build_photo_pdf

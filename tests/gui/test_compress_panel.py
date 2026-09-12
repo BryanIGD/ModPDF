@@ -19,7 +19,7 @@ import pytest
 from modpdf import tasks
 from modpdf.gui.session import load
 from modpdf.gui.window import MainWindow
-from modpdf.ops.compress import Mode
+from modpdf.ops.compress import CompressReport, ImageSummary, Mode
 from tests.conftest import build_photo_pdf, build_scan_pdf
 
 pytestmark = pytest.mark.usefixtures("qt_app")
@@ -41,15 +41,16 @@ def run_compress(window: MainWindow, destination: Path) -> None:
     the right result."""
     assert window.session is not None
     mode: Mode = "lossless" if window.compress_lossless_radio.isChecked() else "visual"
+    level = window.compress_level_choice()
     result = tasks.compress_file(
         window.session.path,
         destination,
         mode=mode,
-        target_dpi=window.compress_target_dpi.value(),
+        level=level,
         password=window.session.password,
         overwrite=True,
     )
-    window._compressed(result)
+    window._compressed(result, level)
 
 
 class TestTheButtonIsNoLongerDisabled:
@@ -75,17 +76,28 @@ class TestPanelDefaults:
         assert window.compress_visual_radio.isChecked()
         assert not window.compress_lossless_radio.isChecked()
 
-    def test_the_default_target_matches_the_documented_default(self, window: MainWindow) -> None:
-        from modpdf.ops.compress import DEFAULT_TARGET_DPI
+    def test_the_default_level_matches_the_documented_default(self, window: MainWindow) -> None:
+        from modpdf.ops.compress import DEFAULT_LEVEL
 
-        assert window.compress_target_dpi.value() == DEFAULT_TARGET_DPI
+        assert window.compress_level_choice() == DEFAULT_LEVEL
+        assert window.compress_balanced_radio.isChecked()
 
-    def test_the_target_field_is_disabled_in_lossless_mode(self, window: MainWindow) -> None:
+    def test_the_three_levels_are_mutually_exclusive(self, window: MainWindow) -> None:
+        window.compress_maximum_radio.setChecked(True)
+        assert not window.compress_quality_radio.isChecked()
+        assert not window.compress_balanced_radio.isChecked()
+        assert window.compress_level_choice() == "high"
+
+        window.compress_quality_radio.setChecked(True)
+        assert not window.compress_maximum_radio.isChecked()
+        assert window.compress_level_choice() == "low"
+
+    def test_the_level_picker_is_disabled_in_lossless_mode(self, window: MainWindow) -> None:
         window.compress_lossless_radio.setChecked(True)
-        assert not window.compress_target_dpi.isEnabled()
+        assert not window.compress_level_container.isEnabled()
 
         window.compress_visual_radio.setChecked(True)
-        assert window.compress_target_dpi.isEnabled()
+        assert window.compress_level_container.isEnabled()
 
 
 class TestRunningACompression:
@@ -124,27 +136,54 @@ class TestRunningACompression:
         # Lossless never recompresses images, so that line has nothing to show.
         assert "recompressed" not in window.compress_result.text()
 
-    def test_a_custom_target_dpi_reaches_the_task_layer(self, tmp_path: Path) -> None:
-        """An unreasonably low target should trip the fallback — proving the
-        spin box's value is what actually got used, not a hardcoded default.
+    def test_selecting_maximum_compression_reaches_the_task_layer(
+        self, window: MainWindow, tmp_path: Path
+    ) -> None:
+        """Proves the checked radio, not a hardcoded default, is what gets
+        used: "Maximum compression" must produce a smaller file than the
+        panel's own default ("Balanced") on the same source document."""
+        balanced_out = tmp_path / "balanced.pdf"
+        run_compress(window, balanced_out)
+        balanced_size = balanced_out.stat().st_size
 
-        This needs the scanned-text fixture rather than the shared photo one:
-        a smooth gradient has little high-frequency detail to lose and
-        genuinely tolerates aggressive downsampling, which is correct gate
-        behaviour, not a hole in it — see test_compress.py and verify.py's
-        own tests for that finding. Hard-edged content is what reliably
-        triggers a fallback at an unreasonable target.
-        """
-        window = MainWindow()
-        try:
-            window._loaded(load(build_scan_pdf(tmp_path / "scan.pdf")))
-            window._show_panel("compress")
-            window.compress_target_dpi.setValue(15)
-            out = tmp_path / "out.pdf"
-            run_compress(window, out)
-            assert "fell back to lossless" in window.compress_result.text()
-        finally:
-            window.close()
+        window.compress_maximum_radio.setChecked(True)
+        maximum_out = tmp_path / "maximum.pdf"
+        run_compress(window, maximum_out)
+
+        assert maximum_out.stat().st_size < balanced_size
+
+    def test_maximum_compression_says_quality_was_traded_away(
+        self, window: MainWindow, tmp_path: Path
+    ) -> None:
+        window.compress_maximum_radio.setChecked(True)
+        run_compress(window, tmp_path / "out.pdf")
+        assert "reduced on purpose" in window.compress_result.text()
+
+    def test_balanced_does_not_say_that(self, window: MainWindow, tmp_path: Path) -> None:
+        run_compress(window, tmp_path / "out.pdf")
+        assert "reduced on purpose" not in window.compress_result.text()
+
+
+class TestTheFallbackIsShownClearly:
+    """The compression itself falling back to lossless is already covered
+    thoroughly in `tests/unit/test_compress.py`; what belongs here is only
+    that the window renders `report.fell_back` correctly, which does not
+    need a real compression that happens to trip the gate — constructing the
+    report directly is simpler and does not depend on tuning a fixture."""
+
+    def test_a_fallback_report_is_shown_as_such(self, window: MainWindow, tmp_path: Path) -> None:
+        out = tmp_path / "out.pdf"
+        out.write_bytes(b"stand-in for a real write, never read back")
+        report = CompressReport(
+            before_bytes=1_000_000,
+            after_bytes=800_000,
+            mode_used="lossless",
+            images=ImageSummary(),
+            fell_back=True,
+            fallback_reason="page 1: 40.0% of pixels changed visibly, above the 35% limit",
+        )
+        window._compressed((out, report))
+        assert "fell back to lossless" in window.compress_result.text()
 
 
 class TestAlreadyOptimalIsShownClearly:

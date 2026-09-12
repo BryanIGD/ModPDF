@@ -39,7 +39,7 @@ from modpdf.gui.grid import PAGE_ROLE, PageGrid
 from modpdf.gui.session import Session, chunk_positions, positions_to_groups
 from modpdf.gui.thumbnails import THUMBNAIL_WIDTH, ThumbnailRenderer, placeholder
 from modpdf.gui.widgets import Chip, RangeRow, SectionLabel, mark_pixmap
-from modpdf.ops.compress import DEFAULT_TARGET_DPI, CompressReport, Mode
+from modpdf.ops.compress import DEFAULT_LEVEL, CompressReport, Level, Mode
 from modpdf.ops.split import plan_pieces
 from modpdf.security.fs import private_scratch_dir, synced_location
 
@@ -383,16 +383,48 @@ class MainWindow(QMainWindow):
         layout.addWidget(lossless_hint)
 
         layout.addSpacing(8)
-        dpi_row = QHBoxLayout()
-        dpi_row.addWidget(QLabel("Target"))
-        self.compress_target_dpi = QSpinBox()
-        self.compress_target_dpi.setRange(50, 600)
-        self.compress_target_dpi.setValue(DEFAULT_TARGET_DPI)
-        self.compress_target_dpi.setSuffix(" dpi")
-        dpi_row.addWidget(self.compress_target_dpi)
-        dpi_row.addStretch(1)
-        layout.addLayout(dpi_row)
-        self.compress_visual_radio.toggled.connect(self.compress_target_dpi.setEnabled)
+        layout.addWidget(SectionLabel("Compression level"))
+
+        self.compress_level_container = QWidget()
+        level_layout = QVBoxLayout(self.compress_level_container)
+        level_layout.setContentsMargins(0, 0, 0, 0)
+        level_layout.setSpacing(2)
+
+        self.compress_level = QButtonGroup(page)
+
+        def level_row(label: str, hint: str) -> QRadioButton:
+            radio = QRadioButton(label)
+            self.compress_level.addButton(radio)
+            level_layout.addWidget(radio)
+            hint_label = QLabel(hint)
+            hint_label.setWordWrap(True)
+            hint_label.setStyleSheet(
+                f"color: {theme.INK_3}; font-size: 11px; padding-left: 22px; padding-bottom: 4px;"
+            )
+            level_layout.addWidget(hint_label)
+            return radio
+
+        self.compress_quality_radio = level_row(
+            "Best quality", "Least compression; only very oversized images shrink."
+        )
+        self.compress_balanced_radio = level_row(
+            "Balanced", "Good compression with no visible difference. Recommended."
+        )
+        self.compress_maximum_radio = level_row(
+            "Maximum compression", "Smallest file; photos may look visibly softer."
+        )
+        self._level_radios: dict[Level, QRadioButton] = {
+            "low": self.compress_quality_radio,
+            "balanced": self.compress_balanced_radio,
+            "high": self.compress_maximum_radio,
+        }
+        self._level_radios[DEFAULT_LEVEL].setChecked(True)
+
+        layout.addWidget(self.compress_level_container)
+        # A disabled parent disables every child in Qt, so this one connection
+        # covers all three radios the same way a single spin box was enabled
+        # or disabled before.
+        self.compress_visual_radio.toggled.connect(self.compress_level_container.setEnabled)
 
         layout.addSpacing(6)
         gate_note = QLabel(
@@ -802,6 +834,7 @@ class MainWindow(QMainWindow):
             return
 
         mode: Mode = "lossless" if self.compress_lossless_radio.isChecked() else "visual"
+        level = self.compress_level_choice()
         self.compress_result.setText("")
         self._set_busy(True, "Compressing…")
         workers.run(
@@ -809,24 +842,37 @@ class MainWindow(QMainWindow):
             session.path,
             destination,
             mode=mode,
-            target_dpi=self.compress_target_dpi.value(),
+            level=level,
             password=session.password,
             overwrite=True,
-            on_done=self._compressed,
+            # `level` is captured here, at the moment the job is submitted,
+            # rather than re-read from the radio buttons once it completes —
+            # the user is free to change the selection while a compression is
+            # still running, and the result shown must describe the job that
+            # actually ran, not whatever is checked by the time it finishes.
+            on_done=lambda result: self._compressed(result, level),
             on_failed=self._failed,
             on_crashed=self._crashed,
         )
 
-    def _compressed(self, result: tuple[Path, CompressReport]) -> None:
+    def compress_level_choice(self) -> Level:
+        for level, radio in self._level_radios.items():
+            if radio.isChecked():
+                return level
+        return DEFAULT_LEVEL  # unreachable: a QButtonGroup always has one checked
+
+    def _compressed(
+        self, result: tuple[Path, CompressReport], level: Level = DEFAULT_LEVEL
+    ) -> None:
         path, report = result
         self._set_busy(False)
         if report.already_optimal:
             self._say(f"{path.name} was already optimal")
         else:
             self._say(f"Compressed → {path.name}  ({report.savings_ratio * 100:.0f}% smaller)")
-        self._show_compress_result(report)
+        self._show_compress_result(report, level)
 
-    def _show_compress_result(self, report: CompressReport) -> None:
+    def _show_compress_result(self, report: CompressReport, level: Level = DEFAULT_LEVEL) -> None:
         if report.already_optimal:
             self.compress_result.setText(
                 f'<span style="color:{theme.GOOD}; font-weight:600;">Already optimal</span><br>'
@@ -861,6 +907,13 @@ class MainWindow(QMainWindow):
             lines.append(
                 f'<span style="font-size:11.5px; color:{theme.GOOD};">'
                 "quality check passed — text identical</span>"
+            )
+
+        if level == "high" and report.mode_used == "visual":
+            lines.append(
+                f'<span style="font-size:11px; color:{theme.WARN};">'
+                "maximum compression: image quality was reduced on purpose "
+                "to shrink the file further</span>"
             )
 
         self.compress_result.setText("<br>".join(lines))

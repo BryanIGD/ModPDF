@@ -16,7 +16,9 @@ from pathlib import Path
 
 import pikepdf
 
+from modpdf import verify as verify_module
 from modpdf.ops.compress import (
+    LEVELS,
     STRUCTURAL_SAVE_OPTIONS,
     CompressReport,
     Mode,
@@ -37,13 +39,27 @@ def compress_file(
     *,
     mode: Mode = "visual",
     target_dpi: int = 200,
+    jpeg_quality: int = 82,
     verify: bool = True,
+    max_differing_fraction: float = verify_module.DEFAULT_MAX_DIFFERING_FRACTION,
+    max_single_pixel_delta: int = verify_module.DEFAULT_MAX_SINGLE_PIXEL_DELTA,
+    always_recompress: bool = False,
 ) -> tuple[pikepdf.Pdf, CompressReport]:
     """Open, compress, and hand back the result plus its report — the shape
     almost every test below wants, with the file's own size as `before_bytes`."""
     before = path.stat().st_size
     with pikepdf.open(path) as pdf:
-        return compress(pdf, before_bytes=before, mode=mode, target_dpi=target_dpi, verify=verify)
+        return compress(
+            pdf,
+            before_bytes=before,
+            mode=mode,
+            target_dpi=target_dpi,
+            jpeg_quality=jpeg_quality,
+            verify=verify,
+            max_differing_fraction=max_differing_fraction,
+            max_single_pixel_delta=max_single_pixel_delta,
+            always_recompress=always_recompress,
+        )
 
 
 class TestStructuralSavingsAlone:
@@ -258,6 +274,87 @@ class TestAlreadyOptimal:
             result, report = compress(pdf, before_bytes=1)  # an impossibly small "before"
             assert result is pdf
             assert report.already_optimal
+
+
+class TestCompressionLevels:
+    """The `LEVELS` table is what `tasks.compress_file` (and, through it, the
+    CLI's `--level` and the desktop app's three radio buttons) actually
+    resolves a named level to. These test the underlying knobs it sets, not
+    the table's exact numbers, which are free to be retuned."""
+
+    def test_balanced_matches_this_modules_own_long_standing_defaults(self) -> None:
+        """Choosing "balanced" must change nothing about what compressing a
+        file already did before levels existed."""
+        from modpdf.ops.compress import DEFAULT_JPEG_QUALITY, DEFAULT_TARGET_DPI
+        from modpdf.verify import DEFAULT_MAX_DIFFERING_FRACTION, DEFAULT_MAX_SINGLE_PIXEL_DELTA
+
+        balanced = LEVELS["balanced"]
+        assert balanced.target_dpi == DEFAULT_TARGET_DPI
+        assert balanced.jpeg_quality == DEFAULT_JPEG_QUALITY
+        assert balanced.max_differing_fraction == DEFAULT_MAX_DIFFERING_FRACTION
+        assert balanced.max_single_pixel_delta == DEFAULT_MAX_SINGLE_PIXEL_DELTA
+
+    def test_low_is_the_least_aggressive_and_high_the_most(self) -> None:
+        low, balanced, high = LEVELS["low"], LEVELS["balanced"], LEVELS["high"]
+        assert low.target_dpi > balanced.target_dpi > high.target_dpi
+        assert low.jpeg_quality > balanced.jpeg_quality > high.jpeg_quality
+
+    def test_only_high_widens_the_quality_gate(self) -> None:
+        """ "low" and "balanced" promise no visible loss, so neither has any
+        reason to accept more visible difference than `verify`'s own default;
+        "high" is the one tier whose entire point is trading some away."""
+        low, balanced, high = LEVELS["low"], LEVELS["balanced"], LEVELS["high"]
+        assert low.max_differing_fraction == balanced.max_differing_fraction
+        assert high.max_differing_fraction > balanced.max_differing_fraction
+
+    def test_a_low_jpeg_quality_shrinks_a_photo_more_than_a_high_one(self, tmp_path: Path) -> None:
+        source = build_photo_pdf(tmp_path / "photo.pdf")
+        _, high_quality = compress_file(source, jpeg_quality=95)
+        _, low_quality = compress_file(source, jpeg_quality=30)
+        assert low_quality.after_bytes < high_quality.after_bytes
+
+    def test_a_widened_fraction_accepts_a_candidate_the_default_gate_would_reject(
+        self, tmp_path: Path
+    ) -> None:
+        """Same aggressive target on the same document: the strict default
+        gate falls back, a deliberately widened one accepts the same result."""
+        source = build_scan_pdf(tmp_path / "scan.pdf")
+
+        _, strict = compress_file(source, target_dpi=15)
+        assert strict.fell_back
+
+        _, widened = compress_file(
+            source,
+            target_dpi=15,
+            max_differing_fraction=0.9,
+            max_single_pixel_delta=255,
+        )
+        assert not widened.fell_back
+        assert widened.mode_used == "visual"
+
+    def test_high_is_the_only_level_that_always_recompresses(self) -> None:
+        low, balanced, high = LEVELS["low"], LEVELS["balanced"], LEVELS["high"]
+        assert not low.always_recompress
+        assert not balanced.always_recompress
+        assert high.always_recompress
+
+    def test_always_recompress_still_shrinks_an_image_already_within_target(
+        self, tmp_path: Path
+    ) -> None:
+        """The bug this exists to fix: a real document whose images are
+        already at or below the target DPI (a screen-resolution export, say)
+        used to have nothing left for `compress` to do — every level skipped
+        such an image outright, so "maximum compression" saved no more than
+        "balanced" did. `always_recompress` re-encodes it anyway, at a lower
+        JPEG quality, instead of leaving it untouched."""
+        source = build_photo_pdf(tmp_path / "photo.pdf")  # native is ~259 DPI
+
+        _, left_alone = compress_file(source, target_dpi=400)
+        assert left_alone.images.recompressed == 0
+
+        _, recompressed = compress_file(source, target_dpi=400, always_recompress=True)
+        assert recompressed.images.recompressed == 1
+        assert recompressed.after_bytes < left_alone.after_bytes
 
 
 class TestNeitherInputIsModified:

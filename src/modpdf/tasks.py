@@ -20,7 +20,7 @@ from pathlib import Path
 from modpdf.document import open_pdf, save_pdf
 from modpdf.inspection import Inspection, count_revisions, inspect_document
 from modpdf.ops import compress as compress_module
-from modpdf.ops.compress import CompressReport, Mode
+from modpdf.ops.compress import CompressReport, Level, Mode
 from modpdf.ops.merge import merge_documents
 from modpdf.ops.sanitize import SanitizeReport, sanitize
 from modpdf.ops.select import select_pages
@@ -202,13 +202,18 @@ def compress_file(
     destination: Path,
     *,
     mode: Mode = "visual",
-    target_dpi: int = compress_module.DEFAULT_TARGET_DPI,
+    level: Level = compress_module.DEFAULT_LEVEL,
     verify: bool = True,
     password: str | None = None,
     overwrite: bool = False,
     on_damage: DamageReport | None = None,
 ) -> tuple[Path, CompressReport]:
     """Write a smaller copy, and report where the savings came from.
+
+    `level` picks one of three tuned presets (`modpdf.ops.compress.LEVELS`) —
+    how far images are downsampled, how hard the JPEG path pushes, and, for
+    "high", how much visible difference `modpdf.verify` will accept before
+    falling back to lossless. Meaningless when `mode` is "lossless".
 
     `before_bytes` — the number every other figure in the report is measured
     against — comes from the real file on disk, not a re-serialization of it;
@@ -218,14 +223,19 @@ def compress_file(
     on disk.
     """
     before_bytes = resolve_input(source).stat().st_size
+    settings = compress_module.LEVELS[level]
 
     with open_pdf(source, password=password, on_damage=on_damage) as pdf:
         compressed, report = compress_module.compress(
             pdf,
             before_bytes=before_bytes,
             mode=mode,
-            target_dpi=target_dpi,
+            target_dpi=settings.target_dpi,
+            jpeg_quality=settings.jpeg_quality,
             verify=verify,
+            max_differing_fraction=settings.max_differing_fraction,
+            max_single_pixel_delta=settings.max_single_pixel_delta,
+            always_recompress=settings.always_recompress,
         )
         written = save_pdf(
             compressed, destination, overwrite=overwrite, **compress_module.STRUCTURAL_SAVE_OPTIONS

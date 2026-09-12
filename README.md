@@ -133,30 +133,44 @@ images. `compress` is honest about that rather than pretending otherwise:
 
 ```
 $ modpdf compress deposition.pdf -o smaller.pdf
-smaller.pdf  461.4 KB → 13.5 KB  (97% smaller)
-  images     1 recompressed, 0 left alone   387.1 KB → 12.2 KB
-  quality    text identical · largest visible difference 2.8% of one page   PASS
+smaller.pdf  55.1 KB → 6.0 KB  (89% smaller)
+  images     1 recompressed, 0 left alone   45.3 KB → 4.7 KB
+  quality    text identical · largest visible difference 2.0% of one page   PASS
 ```
 
 Every page is rendered and compared against the original before the result is
 accepted. If any page looks different enough to matter, the whole document
 falls back to a lossless result instead and says so — the worst case is a file
-smaller than you hoped for, never one that looks worse:
+smaller than you hoped for, never one that looks worse.
+
+`--level` picks how hard to push that trade-off, rather than leaving you to
+guess at a DPI number: `low` barely touches anything, `balanced` (the
+default) is a sensible middle ground, and `high` accepts some visible
+softening in exchange for a meaningfully smaller file:
 
 ```
-$ modpdf compress deposition.pdf -o smaller.pdf --target-dpi 15
-smaller.pdf  461.4 KB → 388.3 KB  (16% smaller)
-  images     1 recompressed, 0 left alone   387.1 KB → 442 B
-  quality    fell back to lossless — page 1: a region differs almost
-             completely (peak difference 250/255)
+$ modpdf compress deposition.pdf -o smaller.pdf --level high
+smaller.pdf  55.1 KB → 4.1 KB  (93% smaller)
+  images     1 recompressed, 0 left alone   45.3 KB → 2.8 KB
+  quality    text identical · largest visible difference 2.6% of one page   PASS
+  note       maximum compression: image quality was reduced on purpose to shrink the file further
 ```
+
+Only `high` widens what the quality gate above will accept before falling
+back — `low` and `balanced` both promise no visible loss, so neither has
+anything to widen. `high` also recompresses every eligible image at its own
+lower JPEG quality even when that image was already correctly sized for
+`--target-dpi`'s effective resolution, not only the oversized ones the other
+two levels touch — otherwise a document whose images were already exported at
+a reasonable size (a screen-resolution scan, say) would have nothing left for
+"maximum compression" to shrink beyond what `balanced` already did.
 
 `--lossless` skips images entirely and only does the safe structural cleanup —
-not one pixel or glyph changes:
+not one pixel or glyph changes, and `--level` has nothing to do in this mode:
 
 ```
 $ modpdf compress deposition.pdf -o smaller.pdf --lossless
-smaller.pdf  461.4 KB → 388.3 KB  (16% smaller)
+smaller.pdf  55.1 KB → 46.5 KB  (16% smaller)
 ```
 
 A text-only document will not shrink much either way — there is no image data

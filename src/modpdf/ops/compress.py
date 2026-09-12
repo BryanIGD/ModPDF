@@ -22,6 +22,14 @@ downsampled and re-encoded. This is the only step that changes what a page
 looks like, which is why it is the only step gated by `modpdf.verify` and the
 only one with a lossless fallback.
 
+How aggressively that image pass runs is chosen by picking one of three named
+`Level`s (see `LEVELS`) rather than a raw DPI number: "low" barely touches
+anything, "balanced" is this module's original, long-standing default, and
+"high" is the one tier allowed to trade away some visible quality for a
+meaningfully smaller file — its own entry in `LEVELS` widens what
+`modpdf.verify` will accept accordingly, rather than reaching for that result
+and immediately discarding it.
+
 Which codec an oversized image gets is decided by its actual pixel values, not
 by how it happens to be stored. A first version trusted the PDF's own storage
 mode — a genuine 1-bit image got CCITT Group 4, anything else got JPEG — and
@@ -61,9 +69,15 @@ from PIL.TiffImagePlugin import TiffImageFile
 from modpdf import verify as verify_module
 
 __all__ = [
+    "DEFAULT_JPEG_QUALITY",
+    "DEFAULT_LEVEL",
+    "DEFAULT_TARGET_DPI",
+    "LEVELS",
     "STRUCTURAL_SAVE_OPTIONS",
     "CompressReport",
     "ImageSummary",
+    "Level",
+    "LevelSettings",
     "Mode",
     "compress",
 ]
@@ -71,11 +85,73 @@ __all__ = [
 Mode = Literal["visual", "lossless"]
 
 DEFAULT_TARGET_DPI = 200
-_JPEG_QUALITY = 82
+DEFAULT_JPEG_QUALITY = 82
 # A recompressed image must land at no more than this fraction of its former
 # size to be worth keeping; anything smaller than that is noise, and the
 # original — already correctly rendered by every reader — is kept instead.
 _MUST_SHRINK_TO = 0.9
+
+# Three named presets, not a raw DPI number for the user to guess at. Each one
+# is a tuned bundle of how aggressively images are downsampled, how hard the
+# JPEG path pushes, and — for "high" only — how much visible difference the
+# quality gate in `modpdf.verify` will accept before falling back to lossless.
+# "low" and "balanced" keep the gate at its normal, strict defaults: those two
+# tiers promise no visible loss, so there is nothing to loosen. "high" is the
+# one tier whose whole purpose is trading visible quality for size — matching
+# how every mainstream PDF compressor's "extreme"/"maximum" tier actually
+# behaves — so its own acceptance threshold is widened to match what it is
+# allowed to do, rather than immediately discarding its own output.
+Level = Literal["low", "balanced", "high"]
+
+DEFAULT_LEVEL: Level = "balanced"
+
+
+@dataclass(frozen=True)
+class LevelSettings:
+    """What one named compression level actually resolves to."""
+
+    target_dpi: int
+    jpeg_quality: int
+    max_differing_fraction: float
+    max_single_pixel_delta: int
+    # "low" and "balanced" only ever touch an image that is actually oversized
+    # for where it is placed — an image already at or below the target is
+    # correctly sized and left alone, because re-encoding it would only cost
+    # quality for no real gain. That is the right choice for two tiers that
+    # both promise no visible loss, but it is also why "high" could otherwise
+    # do little on a document whose images were already reasonably sized
+    # (screen-resolution exports, previously-compressed scans): there would be
+    # nothing left for it to downsample. "high"'s whole premise is trading
+    # quality for size, so it sets this to re-encode every eligible image at
+    # its own lower JPEG quality regardless of whether the image was
+    # oversized — still gated by the same "keep only if it actually shrinks"
+    # check every image goes through.
+    always_recompress: bool = False
+
+
+LEVELS: dict[Level, LevelSettings] = {
+    "low": LevelSettings(
+        target_dpi=300,
+        jpeg_quality=90,
+        max_differing_fraction=verify_module.DEFAULT_MAX_DIFFERING_FRACTION,
+        max_single_pixel_delta=verify_module.DEFAULT_MAX_SINGLE_PIXEL_DELTA,
+    ),
+    # Identical to this module's own long-standing defaults, so choosing
+    # "balanced" changes nothing about what compressing a file already did.
+    "balanced": LevelSettings(
+        target_dpi=DEFAULT_TARGET_DPI,
+        jpeg_quality=DEFAULT_JPEG_QUALITY,
+        max_differing_fraction=verify_module.DEFAULT_MAX_DIFFERING_FRACTION,
+        max_single_pixel_delta=verify_module.DEFAULT_MAX_SINGLE_PIXEL_DELTA,
+    ),
+    "high": LevelSettings(
+        target_dpi=100,
+        jpeg_quality=40,
+        max_differing_fraction=0.45,
+        max_single_pixel_delta=250,
+        always_recompress=True,
+    ),
+}
 
 # QPDF's own structural cleanup: generate object streams, recompress every
 # Flate stream at maximum, and garbage-collect anything unreferenced. Safe on
@@ -127,7 +203,11 @@ def compress(
     before_bytes: int,
     mode: Mode = "visual",
     target_dpi: int = DEFAULT_TARGET_DPI,
+    jpeg_quality: int = DEFAULT_JPEG_QUALITY,
     verify: bool = True,
+    max_differing_fraction: float = verify_module.DEFAULT_MAX_DIFFERING_FRACTION,
+    max_single_pixel_delta: int = verify_module.DEFAULT_MAX_SINGLE_PIXEL_DELTA,
+    always_recompress: bool = False,
 ) -> tuple[pikepdf.Pdf, CompressReport]:
     """Return a compressed copy of `pdf`, and a report of what was done.
 
@@ -143,10 +223,31 @@ def compress(
             structural pass; "lossless" only does the structural pass.
         target_dpi: Images above this effective resolution are downsampled to
             it. Meaningless when `mode` is "lossless".
+        jpeg_quality: Quality passed to the JPEG encoder for photographic
+            images. Meaningless when `mode` is "lossless".
         verify: Compare the visually-compressed result against the original
             with `modpdf.verify` before accepting it. Turning this off is for
             large batch runs in a hurry; leaving it on is what makes the
             "without compromising quality" claim mean something.
+        max_differing_fraction: Forwarded to `modpdf.verify.verify` — how much
+            of a page may look visibly different before the whole document
+            falls back to lossless. Callers that intend to trade away some
+            quality on purpose (a "maximum compression" preset, say) widen
+            this; the default matches `verify`'s own strict default.
+        max_single_pixel_delta: Forwarded to `modpdf.verify.verify` — the
+            per-pixel ceiling that always fails a page outright, catching a
+            region that came out completely wrong regardless of how much of
+            the page it covers. This does not loosen the same way the fraction
+            does: a caller intentionally trading quality for size still needs
+            this floor, since it is what catches an image that came out
+            actually broken rather than merely softer.
+        always_recompress: Re-encode every eligible image at `jpeg_quality`
+            even when it is not oversized for `target_dpi`. Off by default —
+            an image already correctly sized has nothing to gain from a lossy
+            re-encode — but a caller trading quality for size on purpose (the
+            "maximum compression" preset) turns it on, since otherwise a
+            document whose images were already reasonably sized would have
+            nothing left to shrink.
 
     Returns:
         The document to save, and a report describing what happened. If
@@ -159,11 +260,16 @@ def compress(
         return _choose(pdf, pdf, lossless_bytes, before_bytes, "lossless", ImageSummary())
 
     working = _clone(pdf)
-    images = _recompress_images(working, target_dpi)
+    images = _recompress_images(working, target_dpi, jpeg_quality, always_recompress)
     visual_bytes = _saved_size(working)
 
     if verify:
-        verify_result = verify_module.verify(pdf, working)
+        verify_result = verify_module.verify(
+            pdf,
+            working,
+            max_differing_fraction=max_differing_fraction,
+            max_single_pixel_delta=max_single_pixel_delta,
+        )
         if not verify_result.passed:
             return _choose(
                 pdf,
@@ -237,8 +343,12 @@ def _saved_size(pdf: pikepdf.Pdf) -> int:
 # --------------------------------------------------------------- image pass
 
 
-def _recompress_images(pdf: pikepdf.Pdf, target_dpi: int) -> ImageSummary:
-    """Downsample and re-encode every oversized image reachable from a page.
+def _recompress_images(
+    pdf: pikepdf.Pdf, target_dpi: int, jpeg_quality: int, always_recompress: bool
+) -> ImageSummary:
+    """Downsample and re-encode every oversized image reachable from a page —
+    and, when `always_recompress` is set, every other eligible image too, at
+    its own size but the same lower JPEG quality.
 
     Mutates `pdf` in place — callers pass a clone they own for this reason.
     """
@@ -255,7 +365,9 @@ def _recompress_images(pdf: pikepdf.Pdf, target_dpi: int) -> ImageSummary:
             seen.add(key)
 
             effective_dpi = dpi_by_xobject.get(key)
-            outcome = _recompress_one(xobj, effective_dpi, target_dpi)
+            outcome = _recompress_one(
+                xobj, effective_dpi, target_dpi, jpeg_quality, always_recompress=always_recompress
+            )
             if outcome is None:
                 continue
 
@@ -276,12 +388,21 @@ def _recompress_images(pdf: pikepdf.Pdf, target_dpi: int) -> ImageSummary:
 
 
 def _recompress_one(
-    xobj: pikepdf.Object, effective_dpi: float | None, target_dpi: int
+    xobj: pikepdf.Object,
+    effective_dpi: float | None,
+    target_dpi: int,
+    jpeg_quality: int,
+    *,
+    always_recompress: bool = False,
 ) -> tuple[bool, int, int] | None:
     """Try to shrink one image. Returns (touched, bytes_before, bytes_after), or
     None if this image was never a candidate at all (untouched, not counted)."""
-    if effective_dpi is None or effective_dpi <= target_dpi:
-        return None  # not oversized, or never actually painted on a page
+    if effective_dpi is None:
+        return None  # never actually painted on a page
+
+    oversized = effective_dpi > target_dpi
+    if not oversized and not always_recompress:
+        return None  # already correctly sized, and nothing asked for more
 
     if "/SMask" in xobj or "/Mask" in xobj:
         return False, 0, 0  # transparency: see the module docstring
@@ -304,11 +425,17 @@ def _recompress_one(
         return False, 0, 0  # see the module docstring: tested, not skipped by guesswork
 
     before_size = _stream_size(xobj)
-    scale = target_dpi / effective_dpi
-    new_width = max(1, round(int(xobj.Width) * scale))
-    new_height = max(1, round(int(xobj.Height) * scale))
-    if new_width >= int(xobj.Width) and new_height >= int(xobj.Height):
-        return None
+    new_width, new_height = int(xobj.Width), int(xobj.Height)
+    if oversized:
+        scale = target_dpi / effective_dpi
+        new_width = max(1, round(new_width * scale))
+        new_height = max(1, round(new_height * scale))
+        if new_width >= int(xobj.Width) and new_height >= int(xobj.Height):
+            if not always_recompress:
+                return None
+            # Rounding put the target back at the image's own size; fall
+            # through to a quality-only re-encode instead of resizing.
+            new_width, new_height = int(xobj.Width), int(xobj.Height)
 
     try:
         pixels = pdf_image.as_pil_image()
@@ -318,7 +445,7 @@ def _recompress_one(
     if pixels.mode == "1" or (pixels.mode in ("L", "RGB") and _is_effectively_bilevel(pixels)):
         touched = _write_bilevel(xobj, pixels, new_width, new_height)
     elif pixels.mode in ("L", "RGB"):
-        touched = _write_photographic(xobj, pixels, new_width, new_height)
+        touched = _write_photographic(xobj, pixels, new_width, new_height, jpeg_quality)
     else:
         return False, 0, 0
 
@@ -363,10 +490,12 @@ def _is_effectively_bilevel(pixels: Image.Image, *, threshold: float = 0.98) -> 
     return total > 0 and (near_extreme / total) >= threshold
 
 
-def _write_photographic(xobj: pikepdf.Object, pixels: Image.Image, width: int, height: int) -> bool:
+def _write_photographic(
+    xobj: pikepdf.Object, pixels: Image.Image, width: int, height: int, jpeg_quality: int
+) -> bool:
     resized = pixels.resize((width, height), Image.Resampling.LANCZOS)
     buffer = io.BytesIO()
-    resized.save(buffer, format="JPEG", quality=_JPEG_QUALITY)
+    resized.save(buffer, format="JPEG", quality=jpeg_quality)
     xobj.write(buffer.getvalue(), filter=Name("/DCTDecode"))
     xobj.Width = width
     xobj.Height = height

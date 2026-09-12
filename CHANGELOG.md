@@ -41,7 +41,14 @@ Nothing tagged yet. The first release will be 0.1.0.
   near-white, whatever colour space it happens to be stored in, JPEG for
   genuine photographs. CMYK images, indexed images and anything carrying a
   transparency mask are left untouched rather than risked. `--lossless` and
-  `--target-dpi` included.
+  three tuned `--level` presets (`low`, `balanced`, `high`) included, rather
+  than a raw DPI number to guess at — only `high` is allowed to accept a more
+  visibly different result in exchange for a smaller file; `low` and
+  `balanced` both still promise no visible loss. `high` also re-encodes every
+  eligible image at a lower JPEG quality even when it was not oversized,
+  since otherwise a document whose images were already reasonably sized had
+  nothing left for "maximum compression" to do beyond what `balanced` already
+  did — and the report says so when it happens.
 - A desktop application (`modpdf-gui`, optional extra `modpdf[gui]`, PySide6):
   page thumbnails with selection, drag-to-reorder (tracked by the mouse
   directly rather than through Qt's own drag-and-drop, which does not
