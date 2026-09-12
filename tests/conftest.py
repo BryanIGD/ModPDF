@@ -10,6 +10,30 @@ nothing.
 
 from __future__ import annotations
 
+import os
+
+# Set before anything imports `modpdf.cli`: its Rich consoles re-measure the
+# terminal on every print, reading these same variables, so a test asserting
+# on captured CLI output would otherwise wrap and style differently depending
+# on whatever terminal (or lack of one) happens to be running the suite —
+# passing locally and failing in CI, or the reverse, for reasons that have
+# nothing to do with the code under test. This was a real, confirmed bug:
+# GitHub Actions sets FORCE_COLOR for its runners so tool output looks right
+# in the Actions log, which styled a `--help` flag's own name in the middle
+# ("--password-stdin" split by colour codes into separate runs), and a long
+# `tmp_path` wrapped an error message onto two lines mid-sentence — both
+# broke a substring assertion on captured output, only on that platform.
+#
+# NO_COLOR alone does not win: this Rich version gives FORCE_COLOR priority
+# over it, so the variable has to be removed outright, not merely overridden.
+# A fixed, wide, colourless terminal makes captured output deterministic; it
+# has no effect on a real user's actual terminal, which Rich still detects
+# normally outside the test suite.
+os.environ["COLUMNS"] = "200"
+os.environ["NO_COLOR"] = "1"
+os.environ.pop("FORCE_COLOR", None)
+os.environ.pop("CLICOLOR_FORCE", None)
+
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
