@@ -109,10 +109,14 @@ class TestResolveInput:
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX fifo")
     def test_refuses_a_fifo(self, tmp_path: Path) -> None:
         """Opening a device node or pipe and calling it a PDF ends badly."""
-        fifo = tmp_path / "pipe.pdf"
-        os.mkfifo(fifo)
-        with pytest.raises(FileSystemError, match="not a regular file"):
-            resolve_input(fifo)
+        # The marker skips this at run time on Windows; the inner check is what
+        # tells mypy, which type checks the suite for Windows too, that
+        # os.mkfifo is not being reached on a platform that lacks it.
+        if sys.platform != "win32":
+            fifo = tmp_path / "pipe.pdf"
+            os.mkfifo(fifo)
+            with pytest.raises(FileSystemError, match="not a regular file"):
+                resolve_input(fifo)
 
     def test_broken_symlink(self, tmp_path: Path) -> None:
         link = tmp_path / "link.pdf"
