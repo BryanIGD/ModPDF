@@ -26,3 +26,7 @@ tests/fixtures/corpus/
 
 # Written by the audit job from uv.lock; never committed.
 requirements-audit.txt
+
+# Local design-tool exports (mockups, canvas layout). Not shipped code;
+# screenshots of the real, running app go in README.md instead.
+/design/

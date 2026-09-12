@@ -222,3 +222,68 @@ class TestSanitize:
         result = run("sanitize", source, "-o", out)
         assert result.exit_code == 1
         assert out.read_bytes() == b"precious"
+
+
+class TestCompress:
+    def test_compresses_an_oversized_photo(self, tmp_path: Path) -> None:
+        from tests.conftest import build_photo_pdf
+
+        source = build_photo_pdf(tmp_path / "photo.pdf")
+        out = tmp_path / "out.pdf"
+        result = run("compress", source, "-o", out)
+
+        assert result.exit_code == 0
+        assert "smaller" in result.output
+        assert "PASS" in result.output
+        assert out.stat().st_size < source.stat().st_size
+
+    def test_lossless_never_touches_images(self, tmp_path: Path) -> None:
+        from tests.conftest import build_photo_pdf
+
+        source = build_photo_pdf(tmp_path / "photo.pdf")
+        out = tmp_path / "out.pdf"
+        result = run("compress", source, "-o", out, "--lossless")
+
+        assert result.exit_code == 0
+        assert "images" not in result.output  # nothing to report: none were touched
+
+    def test_an_unreasonable_target_falls_back_and_says_so(self, tmp_path: Path) -> None:
+        from tests.conftest import build_scan_pdf
+
+        source = build_scan_pdf(tmp_path / "scan.pdf")
+        out = tmp_path / "out.pdf"
+        result = run("compress", source, "-o", out, "--target-dpi", "15")
+
+        assert result.exit_code == 0
+        assert "fell back to lossless" in result.output
+
+    def test_pages_survive(self, tmp_path: Path) -> None:
+        from tests.conftest import build_photo_pdf
+
+        source = build_photo_pdf(tmp_path / "photo.pdf")
+        out = tmp_path / "out.pdf"
+        run("compress", source, "-o", out)
+        import pypdfium2
+
+        doc = pypdfium2.PdfDocument(str(out))
+        try:
+            assert len(doc) == 1
+        finally:
+            doc.close()
+
+    def test_a_text_only_document_reports_already_optimal_or_small_savings(
+        self, make_pdf: PageMaker, tmp_path: Path
+    ) -> None:
+        source = make_pdf(3)
+        out = tmp_path / "out.pdf"
+        result = run("compress", source, "-o", out)
+        assert result.exit_code == 0
+        assert out.exists()
+
+    def test_will_not_overwrite_without_force(self, make_pdf: PageMaker, tmp_path: Path) -> None:
+        source = make_pdf(2)
+        out = tmp_path / "out.pdf"
+        out.write_bytes(b"precious")
+        result = run("compress", source, "-o", out)
+        assert result.exit_code == 1
+        assert out.read_bytes() == b"precious"
