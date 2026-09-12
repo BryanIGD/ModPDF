@@ -69,6 +69,11 @@ def copy_outline(
     """
     names = _named_destinations(source)
 
+    # _rebuild recurses through the outline tree, which a hostile document
+    # could nest arbitrarily deep. pikepdf bounds this for us: open_outline
+    # stops reading at max_depth (16 by default), so the tree handed to us is
+    # already shallow. If that argument is ever passed explicitly here, this
+    # function needs its own depth guard.
     with source.open_outline() as source_outline:
         rebuilt, kept, dropped = _rebuild(source_outline.root, source, mapping, names)
 

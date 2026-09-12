@@ -85,6 +85,83 @@ def build_bookmarked_pdf(path: Path, page_count: int) -> Path:
     return path
 
 
+def build_hostile_pdf(path: Path, page_count: int = 3) -> Path:
+    """A PDF carrying everything `inspect` is supposed to warn about.
+
+    Real malicious PDFs are not safe to keep in a repository and public samples
+    go stale, so we build our own: document-level JavaScript, an /OpenAction, a
+    Launch action, a tracking URI, an embedded spreadsheet and an XFA form. The
+    payloads are inert — the point is that they are *found*, not that they work.
+    """
+    base = build_pdf(path.parent / f"{path.stem}-base.pdf", page_count)
+    pdf = pikepdf.open(base)
+
+    script = pdf.make_indirect(
+        pikepdf.Dictionary(S=pikepdf.Name("/JavaScript"), JS=pikepdf.String("app.alert(1);"))
+    )
+    pdf.Root["/OpenAction"] = script
+
+    spec = pdf.make_indirect(
+        pikepdf.Dictionary(
+            Type=pikepdf.Name("/Filespec"),
+            F=pikepdf.String("payroll.xlsx"),
+            EF=pikepdf.Dictionary(F=pdf.make_stream(b"inert placeholder bytes")),
+        )
+    )
+    pdf.Root["/Names"] = pdf.make_indirect(
+        pikepdf.Dictionary(
+            JavaScript=pdf.make_indirect(
+                pikepdf.Dictionary(Names=pikepdf.Array([pikepdf.String("startup"), script]))
+            ),
+            EmbeddedFiles=pdf.make_indirect(
+                pikepdf.Dictionary(Names=pikepdf.Array([pikepdf.String("payroll.xlsx"), spec]))
+            ),
+        )
+    )
+
+    launch = pdf.make_indirect(
+        pikepdf.Dictionary(S=pikepdf.Name("/Launch"), F=pikepdf.String("calc.exe"))
+    )
+    uri = pdf.make_indirect(
+        pikepdf.Dictionary(
+            S=pikepdf.Name("/URI"),
+            URI=pikepdf.String("http://tracker.example.com/beacon"),
+        )
+    )
+    pdf.pages[0].obj["/Annots"] = pdf.make_indirect(
+        pikepdf.Array(
+            [
+                pdf.make_indirect(
+                    pikepdf.Dictionary(
+                        Type=pikepdf.Name("/Annot"),
+                        Subtype=pikepdf.Name("/Link"),
+                        Rect=pikepdf.Array([0, 0, 10, 10]),
+                        A=launch,
+                    )
+                ),
+                pdf.make_indirect(
+                    pikepdf.Dictionary(
+                        Type=pikepdf.Name("/Annot"),
+                        Subtype=pikepdf.Name("/Link"),
+                        Rect=pikepdf.Array([0, 10, 10, 20]),
+                        A=uri,
+                    )
+                ),
+            ]
+        )
+    )
+
+    pdf.Root["/AcroForm"] = pdf.make_indirect(
+        pikepdf.Dictionary(
+            XFA=pikepdf.Array([pikepdf.String("template"), pdf.make_stream(b"<xdp:xdp/>")])
+        )
+    )
+
+    pdf.save(path)
+    pdf.close()
+    return path
+
+
 def outline_summary(path: Path) -> list[tuple[int, str, int]]:
     """Flatten a document's outline to (depth, title, 1-based page) triples."""
     summary: list[tuple[int, str, int]] = []
