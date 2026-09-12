@@ -30,7 +30,13 @@ dependencies = [
     "pillow>=11.0",     # image decode / resample / encode
     "typer>=0.15",      # CLI
     "rich>=13.9",       # reports and progress
-    "numpy>=2.4.6",     # the compression quality gate's pixel-difference statistic
+    # The compression quality gate's pixel-difference statistic. Capped below
+    # 2.5: numpy 2.5 dropped Python 3.11 and its bundled .pyi stubs use PEP
+    # 695 `type` syntax mypy refuses to parse under this project's floor
+    # (python_version = "3.11" in [tool.mypy], set to the minimum we support,
+    # not to whatever a dependency's stubs happen to require) — a packaging
+    # mismatch between numpy and mypy, not a real 3.11 incompatibility.
+    "numpy>=2.4.6,<2.5",
 ]
 
 # The desktop app is an optional extra. The core stays at five dependencies;

@@ -42,6 +42,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      # PySide6 links against these at import time, even for the "offscreen"
+      # platform the GUI tests run under — there is no display on this runner.
+      - name: Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3
+
       - uses: astral-sh/setup-uv@v10.1.0
 
       - name: Install
