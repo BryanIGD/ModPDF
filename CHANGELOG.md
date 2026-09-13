@@ -35,35 +35,34 @@ Nothing tagged yet. The first release will be 0.1.0.
 - Atomic, mode-0600 output writing; split directories at mode 0700.
 - `compress`, with a quality gate (`modpdf/verify.py`) that renders every page
   before and after and compares them, falling back to a lossless result — and
-  saying so — the moment any page looks different enough to matter. Oversized
-  images are downsampled and re-encoded with the codec their actual pixel
-  values call for: CCITT Group 4 for anything overwhelmingly near-black or
-  near-white, whatever colour space it happens to be stored in, JPEG for
+  saying so — the moment any page looks different enough to matter.
+- Oversized images are downsampled and re-encoded with the codec their actual
+  pixel values call for: CCITT Group 4 for anything overwhelmingly near-black
+  or near-white, whatever colour space it happens to be stored in, JPEG for
   genuine photographs. CMYK images, indexed images and anything carrying a
-  transparency mask are left untouched rather than risked. `--lossless` and
-  three tuned `--level` presets (`low`, `balanced`, `high`) included, rather
-  than a raw DPI number to guess at — only `high` is allowed to accept a more
-  visibly different result in exchange for a smaller file; `low` and
-  `balanced` both still promise no visible loss. `high` also re-encodes every
-  eligible image even when it was not oversized, since otherwise a document
-  whose images were already reasonably sized had nothing left for "maximum
-  compression" to do beyond what `balanced` already did — and the report
-  says so when it happens. `balanced` and `high` also rasterize a page whose
-  own vector content (not an image at all — a complex diagram exported as
-  drawing commands) is heavy enough to be worth it, each at its own
-  resolution and JPEG quality, since no image setting touches vector art;
-  every character of text on that page, including text that is part of the
-  diagram itself, stays exactly as it was and stays selectable. `balanced`'s
-  flattened result is still held to the same strict quality gate as
-  everything else it does, so this did not loosen its no-visible-loss
-  promise — only `high` widens what the gate will accept. `low` never
-  rasterizes a page; it promises to barely touch anything. `high`'s own
-  image resolution and JPEG quality are kept deliberately close to lossless
-  (raised after an early, more aggressive version made a flattened diagram's
-  own text hard to read), so it is a promise about documents with vector
-  content worth flattening, not a blanket "always the smallest file" — on an
-  ordinary photo or scan with no such page, `balanced` can legitimately
-  produce the smaller result.
+  transparency mask are left untouched rather than risked.
+- `--lossless` and three tuned `--level` presets (`low`, `balanced`, `high`),
+  rather than a raw DPI number to guess at. Only `high` is allowed to accept
+  a more visibly different result in exchange for a smaller file; `low` and
+  `balanced` both still promise no visible loss.
+- `high` re-encodes every eligible image even when it was not oversized.
+  Otherwise a document whose images were already reasonably sized had
+  nothing left for "maximum compression" to do beyond what `balanced`
+  already did, and the report says so when that happens.
+- `balanced` and `high` can also rasterize a page whose own vector content —
+  not an image at all, a complex diagram exported as drawing commands — is
+  heavy enough to be worth it, each at its own resolution and JPEG quality,
+  since no image setting touches vector art. Every character of text on that
+  page, including text that is itself part of the diagram, stays exactly as
+  it was and stays selectable. `low` never does this. `balanced`'s flattened
+  result still has to clear the same strict quality gate as everything else
+  it does, so this did not loosen its no-visible-loss promise; only `high`
+  widens what the gate will accept.
+- `high`'s own image resolution and JPEG quality are kept deliberately close
+  to lossless — an early, more aggressive version made a flattened diagram's
+  own text hard to read. One consequence worth knowing: on an ordinary photo
+  or scan with no vector page to flatten, `high` has little left to trade,
+  and `balanced` can end up producing the smaller file.
 - A desktop application (`modpdf-gui`, optional extra `modpdf[gui]`, PySide6):
   page thumbnails with selection, drag-to-reorder (tracked by the mouse
   directly rather than through Qt's own drag-and-drop, which does not
