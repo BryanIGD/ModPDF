@@ -75,8 +75,11 @@ _DARK = {
 }
 
 # Every name _LIGHT and _DARK define must match exactly, or a mode switch
-# would leave a stale attribute behind from whichever loaded first.
-assert set(_LIGHT) == set(_DARK)
+# would leave a stale attribute behind from whichever loaded first. A plain
+# `assert` would be stripped under `-O`, silently dropping this check, so
+# this is a real, always-on condition instead.
+if set(_LIGHT) != set(_DARK):
+    raise ValueError("_LIGHT and _DARK must define exactly the same names")
 
 # Bound from `_LIGHT` here, and only ever reassigned as a whole group by
 # `set_mode` below (never touched one name at a time) — real assignments, not
