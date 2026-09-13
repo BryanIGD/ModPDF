@@ -377,7 +377,12 @@ class TestFlatteningComplexVectorPages:
     def test_a_heavy_vector_page_shrinks_with_text_intact(self, tmp_path: Path) -> None:
         import pypdfium2
 
-        source = build_dense_diagram_pdf(tmp_path / "diagram.pdf")
+        # More shapes than this class's other tests: "high"'s target DPI and
+        # JPEG quality were both raised (to keep a flattened page legible),
+        # which means the flattened background wins by a smaller margin than
+        # it used to — a page has to have genuinely heavy vector content
+        # before flattening it is worth it, which is exactly the point.
+        source = build_dense_diagram_pdf(tmp_path / "diagram.pdf", shapes=20000)
         # This test uses "high"'s own settings end to end, not only the flag
         # under test: at this file's much gentler defaults (200 DPI, quality
         # 82, the strict gate), the flattened background does not beat the

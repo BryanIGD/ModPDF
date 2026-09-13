@@ -150,9 +150,9 @@ softening in exchange for a meaningfully smaller file:
 
 ```
 $ modpdf compress deposition.pdf -o smaller.pdf --level high
-smaller.pdf  55.1 KB → 4.6 KB  (92% smaller)
-  images     1 recompressed, 0 left alone   45.3 KB → 3.4 KB
-  quality    text identical · largest visible difference 2.3% of one page   PASS
+smaller.pdf  55.1 KB → 5.4 KB  (90% smaller)
+  images     1 recompressed, 0 left alone   45.3 KB → 4.2 KB
+  quality    text identical · largest visible difference 2.2% of one page   PASS
   note       maximum compression: image quality was reduced on purpose to shrink the file further
 ```
 
@@ -176,10 +176,10 @@ label:
 
 ```
 $ modpdf compress paper.pdf -o smaller.pdf --level high
-paper.pdf  2.3 MB → 913.6 KB  (61% smaller)
+paper.pdf  2.3 MB → 953.1 KB  (59% smaller)
   images     3 already at or below the target, left alone
   vector     1 page of complex vector art flattened to an image
-  quality    text identical · largest visible difference 1.7% of one page   PASS
+  quality    text identical · largest visible difference 0.3% of one page   PASS
   note       maximum compression: image quality was reduced on purpose to
              shrink the file further; text stays selectable even on a
              flattened page — only its vector art was
