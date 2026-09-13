@@ -168,13 +168,21 @@ a reasonable size (a screen-resolution scan, say) would have nothing left for
 Not every large PDF is large because of its images. A complex vector diagram
 — thousands of curves and fills a design tool exported directly as drawing
 commands, not as a picture — can outweigh every image in the file combined,
-and no image setting touches it, because it is not an image. `high` is also
-the one level that rasterizes a page whose own vector content is heavy enough
-to be worth it, while leaving every character of text on that page exactly as
-it was — including text that is itself part of the diagram, like a box's own
-label:
+and no image setting touches it, because it is not an image. Both `balanced`
+and `high` rasterize a page whose own vector content is heavy enough to be
+worth it, each at its own resolution and JPEG quality, while leaving every
+character of text on that page exactly as it was — including text that is
+itself part of the diagram, like a box's own label. `low` never does this; it
+promises to barely touch anything, and a rasterized page is a bigger change
+than that:
 
 ```
+$ modpdf compress paper.pdf -o smaller.pdf --level balanced
+paper.pdf  2.3 MB → 1.7 MB  (26% smaller)
+  images     3 already at or below the target, left alone
+  vector     1 page of complex vector art flattened to an image
+  quality    text identical · largest visible difference 0.1% of one page   PASS
+
 $ modpdf compress paper.pdf -o smaller.pdf --level high
 paper.pdf  2.3 MB → 953.1 KB  (59% smaller)
   images     3 already at or below the target, left alone
@@ -184,6 +192,12 @@ paper.pdf  2.3 MB → 953.1 KB  (59% smaller)
              shrink the file further; text stays selectable even on a
              flattened page — only its vector art was
 ```
+
+`balanced`'s flattened result is still held to the same strict, unwidened
+quality gate as the rest of what it does — the same gate that would fall the
+whole document back to lossless if a flattened page ever looked wrong — so
+turning this on for `balanced` did not loosen its "no visible loss" promise;
+only `high` does that.
 
 `--lossless` skips images entirely and only does the safe structural cleanup —
 not one pixel or glyph changes, and `--level` has nothing to do in this mode:

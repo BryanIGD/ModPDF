@@ -364,14 +364,17 @@ class TestFlatteningComplexVectorPages:
     """A photo-heavy scan is not the only way a PDF gets large: a page whose
     own vector content (not an image at all) is enormous is untouched by
     every image-level setting, since there is no oversized image to find.
-    `flatten_vector_pages` (only ever on for "high") rasterizes such a page's
-    graphics while keeping every character of its text exactly as it was.
+    `flatten_vector_pages` rasterizes such a page's graphics while keeping
+    every character of its text exactly as it was. "low" never does this —
+    it promises to barely touch anything; "balanced" and "high" both do, at
+    their own settings, so a document like that lands between the two
+    instead of "balanced" tying with "low" on it.
     """
 
-    def test_only_high_flattens_by_default(self) -> None:
+    def test_low_never_flattens_but_balanced_and_high_do(self) -> None:
         low, balanced, high = LEVELS["low"], LEVELS["balanced"], LEVELS["high"]
         assert not low.flatten_vector_pages
-        assert not balanced.flatten_vector_pages
+        assert balanced.flatten_vector_pages
         assert high.flatten_vector_pages
 
     def test_a_heavy_vector_page_shrinks_with_text_intact(self, tmp_path: Path) -> None:

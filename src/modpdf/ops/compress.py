@@ -133,13 +133,33 @@ class LevelSettings:
     # export them) can outweigh every raster image in the file combined, and
     # no image setting touches it — text and vector art are never part of the
     # image pass. When set, a page whose combined vector content exceeds
-    # `_FLATTEN_THRESHOLD_BYTES` is rasterized into one background image at
-    # `target_dpi`/`jpeg_quality`, while every text-showing operator is kept
-    # exactly as it was, unrasterized, on top of it — so extracted text is
-    # still identical, the one thing this stays non-negotiable about even at
-    # "high". Off for "low" and "balanced": both promise the page itself is
-    # untouched, not just its images.
+    # `_FLATTEN_THRESHOLD_BYTES` is rasterized into one background image,
+    # while every text-showing operator is kept exactly as it was,
+    # unrasterized, on top of it — so extracted text is still identical, the
+    # one thing this stays non-negotiable about even at "high". This is safe
+    # to enable at "balanced" too: the result is still checked by the same
+    # `modpdf.verify` call every visual-mode candidate goes through, at
+    # "balanced"'s own strict (unwidened) thresholds, so a flattened page that
+    # does not hold up simply falls the whole document back to lossless, the
+    # same safety net "balanced" already relies on for its image pass. Only
+    # "high" widens what that gate will accept. Off for "low": it promises to
+    # barely touch anything, and a rasterized page is a bigger change than
+    # that promise allows.
     flatten_vector_pages: bool = False
+    # The resolution/JPEG quality the flatten pass renders at, if different
+    # from `target_dpi`/`jpeg_quality`. `None` (every level but "balanced")
+    # means reuse them as-is — what "high" has always done. "balanced" needs
+    # its own, gentler pair here: its image-pass settings are tuned to
+    # recompress an already-oversized photo without visible loss, which is a
+    # very different job from rasterizing an entire page, and reusing them
+    # for that produced a *smaller* flattened result than "high"'s own on a
+    # real test document — the "maximum compression" tier being outcompressed
+    # by the one below it. These exist so "balanced" can flatten a heavy page
+    # too without that inversion, landing between "low" (never flattens) and
+    # "high" (flattens at its own, more aggressive settings) the way a middle
+    # tier should.
+    flatten_target_dpi: int | None = None
+    flatten_jpeg_quality: int | None = None
 
 
 LEVELS: dict[Level, LevelSettings] = {
@@ -149,13 +169,23 @@ LEVELS: dict[Level, LevelSettings] = {
         max_differing_fraction=verify_module.DEFAULT_MAX_DIFFERING_FRACTION,
         max_single_pixel_delta=verify_module.DEFAULT_MAX_SINGLE_PIXEL_DELTA,
     ),
-    # Identical to this module's own long-standing defaults, so choosing
-    # "balanced" changes nothing about what compressing a file already did.
+    # Its image pass is identical to this module's own long-standing
+    # defaults. On their own, though, "low" and "balanced" came out identical
+    # on a real document whose only images were policy-skipped (CMYK/masked)
+    # and whose actual bulk was one heavy vector page — there was nothing
+    # left for either tier's image settings to do, so both just ran the same
+    # structural pass. "balanced" now also flattens a heavy vector page, at
+    # its own gentler `flatten_target_dpi`/`flatten_jpeg_quality` (see
+    # `LevelSettings`), so a document like that actually lands between "low"
+    # and "high" instead of tying with "low".
     "balanced": LevelSettings(
         target_dpi=DEFAULT_TARGET_DPI,
         jpeg_quality=DEFAULT_JPEG_QUALITY,
         max_differing_fraction=verify_module.DEFAULT_MAX_DIFFERING_FRACTION,
         max_single_pixel_delta=verify_module.DEFAULT_MAX_SINGLE_PIXEL_DELTA,
+        flatten_vector_pages=True,
+        flatten_target_dpi=350,
+        flatten_jpeg_quality=100,
     ),
     "high": LevelSettings(
         target_dpi=150,
@@ -227,6 +257,8 @@ def compress(
     max_single_pixel_delta: int = verify_module.DEFAULT_MAX_SINGLE_PIXEL_DELTA,
     always_recompress: bool = False,
     flatten_vector_pages: bool = False,
+    flatten_target_dpi: int | None = None,
+    flatten_jpeg_quality: int | None = None,
 ) -> tuple[pikepdf.Pdf, CompressReport]:
     """Return a compressed copy of `pdf`, and a report of what was done.
 
@@ -271,10 +303,17 @@ def compress(
             (its own content stream plus every Form XObject it draws) exceeds
             `_FLATTEN_THRESHOLD_BYTES`. Text stays vector and identical; only
             paths, shadings and images already on the page are replaced by
-            one background image at `target_dpi`/`jpeg_quality`. Off by
+            one background image at `flatten_target_dpi`/`flatten_jpeg_quality`
+            (or `target_dpi`/`jpeg_quality`, if those are not given). Off by
             default: a photo-heavy scan never needs this, and a page that is
             mostly a complex diagram is otherwise untouched by the image
             pass entirely, since it has no oversized raster image to find.
+        flatten_target_dpi: The resolution the flattened background is
+            rendered at, if different from `target_dpi`. `None` reuses
+            `target_dpi`. Meaningless unless `flatten_vector_pages` is set.
+        flatten_jpeg_quality: The JPEG quality the flattened background is
+            encoded at, if different from `jpeg_quality`. `None` reuses
+            `jpeg_quality`. Meaningless unless `flatten_vector_pages` is set.
 
     Returns:
         The document to save, and a report describing what happened. If
@@ -290,7 +329,11 @@ def compress(
     images = _recompress_images(working, target_dpi, jpeg_quality, always_recompress)
     pages_flattened = 0
     if flatten_vector_pages:
-        pages_flattened = _flatten_heavy_pages(working, target_dpi, jpeg_quality)
+        pages_flattened = _flatten_heavy_pages(
+            working,
+            flatten_target_dpi if flatten_target_dpi is not None else target_dpi,
+            flatten_jpeg_quality if flatten_jpeg_quality is not None else jpeg_quality,
+        )
     visual_bytes = _saved_size(working)
 
     if verify:
