@@ -24,6 +24,8 @@ def main(argv: list[str] | None = None) -> int:
     # Imported after the guard is installed, so that even Qt starts up inside it.
     from PySide6.QtWidgets import QApplication
 
+    from modpdf.gui import settings as settings_module
+    from modpdf.gui import theme
     from modpdf.gui.widgets import app_icon
     from modpdf.gui.window import MainWindow
 
@@ -33,6 +35,10 @@ def main(argv: list[str] | None = None) -> int:
     application.setApplicationDisplayName("ModPDF")
     application.setOrganizationName("ModPDF")
     application.setWindowIcon(app_icon())
+
+    # Read once, before the first widget exists — see `theme.set_mode`'s own
+    # docstring for why this has to happen here rather than inside the window.
+    theme.set_mode(dark=settings_module.dark_mode())
 
     window = MainWindow()
     window.show()

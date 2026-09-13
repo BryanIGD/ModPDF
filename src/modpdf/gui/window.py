@@ -9,13 +9,16 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QSize, Qt, QThread, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -30,20 +33,56 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from modpdf import tasks
+from modpdf import __version__, tasks
 from modpdf.document import EncryptedDocumentError
+from modpdf.gui import icons, theme, workers
 from modpdf.gui import session as session_module
-from modpdf.gui import theme, workers
+from modpdf.gui import settings as settings_module
 from modpdf.gui.grid import PAGE_ROLE, PageGrid
 from modpdf.gui.session import Session, positions_to_groups
-from modpdf.gui.thumbnails import THUMBNAIL_WIDTH, ThumbnailRenderer, placeholder
-from modpdf.gui.widgets import Chip, RangeRow, SectionLabel, mark_pixmap
+from modpdf.gui.thumbnails import ThumbnailRenderer, placeholder
+from modpdf.gui.widgets import (
+    Chip,
+    RangeRow,
+    SectionLabel,
+    SegmentedControl,
+    ThemeToggle,
+    mark_pixmap,
+)
 from modpdf.ops.compress import DEFAULT_LEVEL, CompressReport, Level, Mode
 from modpdf.ops.split import plan_pieces
 from modpdf.security.fs import private_scratch_dir, synced_location
 
 # Re-exported so callers need only one import to work with the grid.
 __all__ = ["PAGE_ROLE", "MainWindow"]
+
+# Opened via the OS's own handler (QLabel.setOpenExternalLinks), never fetched
+# by this process — clicking it does not touch the network guard this window
+# installs on itself.
+_THREAT_MODEL_URL = "https://github.com/BryanIGD/ModPDF/blob/main/THREAT_MODEL.md"
+
+# Pixel widths behind the Settings dialog's "Thumbnail size" choice.
+# "medium" is the width the grid always used before this was configurable.
+_THUMBNAIL_WIDTHS: dict[settings_module.ThumbnailSize, int] = {
+    "small": 112,
+    "medium": 168,
+    "large": 232,
+}
+_THUMBNAIL_SIZE_LABELS: dict[settings_module.ThumbnailSize, str] = {
+    "small": "Small",
+    "medium": "Medium",
+    "large": "Large",
+}
+_THUMBNAIL_SIZE_KEYS = {label: key for key, label in _THUMBNAIL_SIZE_LABELS.items()}
+
+# Same idea for the Compress panel's level choice — shorter labels than the
+# panel's own radio buttons, since the dialog has one line to fit them in.
+_COMPRESS_LEVEL_LABELS: dict[Level, str] = {
+    "low": "Best",
+    "balanced": "Balanced",
+    "high": "Maximum",
+}
+_COMPRESS_LEVEL_KEYS = {label: key for key, label in _COMPRESS_LEVEL_LABELS.items()}
 
 
 class MainWindow(QMainWindow):
@@ -65,6 +104,7 @@ class MainWindow(QMainWindow):
         # than one file into this window's workspace; removed whole when the
         # window closes.
         self._workspace_dir: Path | None = None
+        self._thumbnail_width = _THUMBNAIL_WIDTHS[settings_module.thumbnail_size()]
 
         self._build_chrome()
         self._start_renderer()
@@ -109,11 +149,11 @@ class MainWindow(QMainWindow):
         row.setSpacing(12)
 
         mark = QLabel()
-        mark.setPixmap(mark_pixmap(19))
+        mark.setPixmap(mark_pixmap(19, ink_color=theme.INK))
         row.addWidget(mark)
 
         wordmark = QLabel(
-            f'<span style="color:{theme.SLATE};font-weight:700;">Mod</span>'
+            f'<span style="color:{theme.INK};font-weight:700;">Mod</span>'
             f'<span style="color:{theme.BLUE};font-weight:700;">PDF</span>'
         )
         wordmark.setStyleSheet("font-size: 14px;")
@@ -141,39 +181,47 @@ class MainWindow(QMainWindow):
         self.review_button.clicked.connect(lambda: self._show_panel("findings"))
         self.review_button.hide()
         row.addWidget(self.review_button)
+
+        self.settings_button = _chrome_button("gear", "Settings")
+        self.settings_button.clicked.connect(self._show_settings)
+        row.addWidget(self.settings_button)
+
+        self.help_button = _chrome_button("info", "Help")
+        self.help_button.clicked.connect(self._show_help)
+        row.addWidget(self.help_button)
         return header
 
     def _build_toolbar(self) -> QWidget:
         bar = QFrame()
         bar.setObjectName("Toolbar")
-        bar.setFixedHeight(46)
+        bar.setFixedHeight(54)
         row = QHBoxLayout(bar)
-        row.setContentsMargins(14, 0, 14, 0)
-        row.setSpacing(4)
+        row.setContentsMargins(10, 0, 14, 0)
+        row.setSpacing(2)
 
-        self.open_button = QPushButton("Open")
+        self.open_button = QPushButton(" Open")
+        self.open_button.setObjectName("Tool")
+        self.open_button.setIcon(icons.icon("folder", size=15, color=theme.INK_2))
+        self.open_button.setIconSize(QSize(15, 15))
         self.open_button.setToolTip(
             "Open a PDF, or — with one already open — add its pages onto the end"
         )
         self.open_button.clicked.connect(self.choose_file)
         row.addWidget(self.open_button)
 
-        divider = QFrame()
-        divider.setFrameShape(QFrame.Shape.VLine)
-        divider.setStyleSheet(f"color: {theme.LINE};")
-        row.addWidget(divider)
-
         self.tool_buttons: dict[str, QPushButton] = {}
-        for key, label in (
-            ("pages", "Pages"),
-            ("split", "Split"),
-            ("compress", "Compress"),
-            ("sanitize", "Sanitize"),
-            ("findings", "What is in this file"),
+        for key, label, icon_name in (
+            ("pages", "Pages", "document"),
+            ("split", "Split", "scissors"),
+            ("compress", "Compress", "compress"),
+            ("sanitize", "Sanitize", "shield"),
+            ("findings", "What is in this file", "list"),
         ):
-            button = QPushButton(label)
+            button = QPushButton(f" {label}")
             button.setObjectName("Tool")
             button.setCheckable(True)
+            button.setIcon(icons.icon(icon_name, size=15, color=theme.INK_2))
+            button.setIconSize(QSize(15, 15))
             button.clicked.connect(lambda _checked, k=key: self._show_panel(k))
             self.tool_buttons[key] = button
             row.addWidget(button)
@@ -186,12 +234,20 @@ class MainWindow(QMainWindow):
 
     def _build_empty_state(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        outer = QVBoxLayout(page)
+        outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        outer.setSpacing(14)
+
+        drop_zone = QFrame()
+        drop_zone.setObjectName("DropZone")
+        drop_zone.setFixedWidth(460)
+        layout = QVBoxLayout(drop_zone)
+        layout.setContentsMargins(40, 44, 40, 40)
+        layout.setSpacing(14)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.setSpacing(18)
 
         mark = QLabel()
-        mark.setPixmap(mark_pixmap(76))
+        mark.setPixmap(mark_pixmap(76, ink_color=theme.INK))
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(mark)
 
@@ -201,11 +257,11 @@ class MainWindow(QMainWindow):
         layout.addWidget(heading)
 
         blurb = QLabel(
-            "Nothing is uploaded and nothing is changed until you save.\n"
-            "There is no recent-files list: a list of paths to confidential\n"
-            "documents is itself a leak."
+            "Edit, reorganize, and sanitize PDFs locally.\n"
+            "Nothing is uploaded and nothing changes until you save."
         )
         blurb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        blurb.setWordWrap(True)
         blurb.setStyleSheet(f"color: {theme.INK_2}; font-size: 12.5px;")
         layout.addWidget(blurb)
 
@@ -217,10 +273,27 @@ class MainWindow(QMainWindow):
         holder.addWidget(choose)
         holder.addStretch(1)
         layout.addLayout(holder)
+
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet(f"color: {theme.LINE_SOFT};")
+        layout.addWidget(divider)
+
+        tagline = QLabel("Your files stay on this device.\nBuilt for privacy.")
+        tagline.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tagline.setStyleSheet(f"color: {theme.INK_3}; font-size: 11.5px;")
+        layout.addWidget(tagline)
+
+        outer.addWidget(drop_zone, 0, Qt.AlignmentFlag.AlignCenter)
+
+        hint = QLabel("Or open a file from your computer to get started.")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet(f"color: {theme.INK_3}; font-size: 12px;")
+        outer.addWidget(hint)
         return page
 
     def _build_grid(self) -> QWidget:
-        self.grid = PageGrid(THUMBNAIL_WIDTH)
+        self.grid = PageGrid(self._thumbnail_width)
         self.grid.itemSelectionChanged.connect(self._refresh)
         self.grid.pages_moved.connect(self._pages_moved)
         return self.grid
@@ -243,20 +316,53 @@ class MainWindow(QMainWindow):
         }
         layout.addWidget(self.panels, 1)
 
+        footer_wrap = QWidget()
+        footer_wrap_layout = QVBoxLayout(footer_wrap)
+        footer_wrap_layout.setContentsMargins(18, 12, 18, 16)
+
         footer = QFrame()
-        footer.setStyleSheet(
-            f"background: {theme.SURFACE}; border-top: 1px solid {theme.LINE_SOFT};"
-        )
+        footer.setObjectName("Card")
         footer_column = QVBoxLayout(footer)
-        footer_column.setContentsMargins(18, 12, 18, 12)
+        footer_column.setContentsMargins(14, 12, 14, 12)
+        footer_column.setSpacing(6)
+
+        status_row = QHBoxLayout()
+        status_row.setSpacing(6)
+        dot = QLabel("●")
+        dot.setStyleSheet(f"color: {theme.GOOD}; font-size: 9px;")
+        status_row.addWidget(dot)
         offline = QLabel("Offline")
-        offline.setStyleSheet(f"color: {theme.BLUE}; font-size: 11.5px; font-weight: 600;")
-        footer_column.addWidget(offline)
-        note = QLabel("This app blocked its own network access at startup.")
+        offline.setStyleSheet("font-size: 12.5px; font-weight: 600;")
+        status_row.addWidget(offline)
+        status_row.addStretch(1)
+        footer_column.addLayout(status_row)
+
+        note = QLabel(
+            "This app blocked its own network access at startup. No network "
+            "connections are permitted while running."
+        )
         note.setWordWrap(True)
         note.setStyleSheet(f"color: {theme.INK_3}; font-size: 11px;")
         footer_column.addWidget(note)
-        layout.addWidget(footer)
+
+        privacy_row = QHBoxLayout()
+        privacy_row.setSpacing(6)
+        privacy_icon = QLabel()
+        privacy_icon.setPixmap(icons.icon_pixmap("shield", size=13, color=theme.INK_3))
+        privacy_icon.setAlignment(Qt.AlignmentFlag.AlignTop)
+        privacy_row.addWidget(privacy_icon)
+        privacy_text = QLabel(
+            "Your files never leave this device. "
+            f'<a href="{_THREAT_MODEL_URL}" style="color:{theme.BLUE};">Learn more</a>'
+        )
+        privacy_text.setOpenExternalLinks(True)
+        privacy_text.setWordWrap(True)
+        privacy_text.setStyleSheet(f"color: {theme.INK_3}; font-size: 11px;")
+        privacy_row.addWidget(privacy_text, 1)
+        footer_column.addLayout(privacy_row)
+
+        footer_wrap_layout.addWidget(footer)
+        layout.addWidget(footer_wrap)
         return panel
 
     def _panel_shell(self) -> tuple[QWidget, QVBoxLayout]:
@@ -269,23 +375,65 @@ class MainWindow(QMainWindow):
     def _build_pages_panel(self) -> QWidget:
         page, layout = self._panel_shell()
         layout.addWidget(SectionLabel("Document"))
-        self.document_facts = QLabel()
-        self.document_facts.setWordWrap(True)
-        self.document_facts.setStyleSheet(f"color: {theme.INK_2}; font-size: 12.5px;")
-        layout.addWidget(self.document_facts)
+
+        card = QFrame()
+        card.setObjectName("Card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.setSpacing(8)
+
+        self.doc_status_label = QLabel("No document open")
+        self.doc_status_label.setStyleSheet("font-size: 13px; font-weight: 600;")
+        self.doc_status_label.setWordWrap(True)
+        card_layout.addWidget(self.doc_status_label)
+
+        fact_grid = QGridLayout()
+        fact_grid.setContentsMargins(0, 0, 0, 0)
+        fact_grid.setHorizontalSpacing(10)
+        fact_grid.setVerticalSpacing(4)
+        fact_grid.setColumnStretch(1, 1)
+        self.doc_fact_values: dict[str, QLabel] = {}
+        for row, (key, caption) in enumerate(
+            (
+                ("name", "File name"),
+                ("pages", "Pages"),
+                ("size", "File size"),
+                ("version", "PDF version"),
+            )
+        ):
+            caption_label = QLabel(caption)
+            caption_label.setStyleSheet(f"color: {theme.INK_3}; font-size: 12px;")
+            fact_grid.addWidget(caption_label, row, 0)
+            value_label = QLabel("—")
+            value_label.setStyleSheet(f"color: {theme.INK}; font-size: 12px;")
+            value_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+            fact_grid.addWidget(value_label, row, 1)
+            self.doc_fact_values[key] = value_label
+        card_layout.addLayout(fact_grid)
+
+        layout.addWidget(card)
 
         layout.addSpacing(8)
         layout.addWidget(SectionLabel("With the selected pages"))
+        self.selection_hint = QLabel(
+            "Select one or more pages in the document to enable these actions."
+        )
+        self.selection_hint.setWordWrap(True)
+        self.selection_hint.setStyleSheet(f"color: {theme.INK_3}; font-size: 11.5px;")
+        layout.addWidget(self.selection_hint)
 
-        self.extract_button = QPushButton("Extract to a new file…")
+        self.extract_button = QPushButton(" Extract to a new file…")
+        self.extract_button.setIcon(icons.icon("export", size=14, color=theme.INK_2))
         self.extract_button.clicked.connect(self.extract_selected)
         layout.addWidget(self.extract_button)
 
-        self.delete_button = QPushButton("Delete from document")
+        self.delete_button = QPushButton(" Delete from document")
+        self.delete_button.setIcon(icons.icon("trash", size=14, color=theme.INK_2))
         self.delete_button.clicked.connect(self.delete_selected)
         layout.addWidget(self.delete_button)
 
-        self.duplicate_button = QPushButton("Duplicate")
+        self.duplicate_button = QPushButton(" Duplicate")
+        self.duplicate_button.setIcon(icons.icon("copy", size=14, color=theme.INK_2))
         self.duplicate_button.clicked.connect(self.duplicate_selected)
         layout.addWidget(self.duplicate_button)
 
@@ -396,7 +544,16 @@ class MainWindow(QMainWindow):
             "balanced": self.compress_balanced_radio,
             "high": self.compress_maximum_radio,
         }
-        self._level_radios[DEFAULT_LEVEL].setChecked(True)
+        self._level_radios[settings_module.default_compress_level()].setChecked(True)
+        # Remember whichever tier is picked here, so the panel starts on it
+        # next time instead of resetting to "Balanced" — see
+        # `modpdf.gui.settings.default_compress_level`.
+        for level, radio in self._level_radios.items():
+            radio.toggled.connect(
+                lambda checked, level=level: (
+                    settings_module.set_default_compress_level(level) if checked else None
+                )
+            )
 
         layout.addWidget(self.compress_level_container)
         # A disabled parent disables every child in Qt, so this one connection
@@ -509,6 +666,180 @@ class MainWindow(QMainWindow):
             item = self.grid.item(row)
             if item.data(PAGE_ROLE) == index:
                 item.setIcon(pixmap)
+
+    # ---------------------------------------------------------------- chrome
+
+    def _show_settings(self) -> None:
+        """Every preference this app remembers between runs so far — see
+        `modpdf.gui.settings` for why there is no broader config file. Each
+        one applies immediately, to this window and to the dialog itself;
+        see `_apply_theme`, `_set_thumbnail_size` and
+        `_set_default_compress_level`.
+
+        Appearance is deliberately last: it is the one choice here that is
+        about the window rather than about a document, so it reads as a
+        closing "and one more thing" rather than the point of the dialog.
+        """
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Settings")
+        dialog.setFixedWidth(340)
+        dialog.setStyleSheet(theme.stylesheet())
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(10)
+
+        thumbnail_label = SectionLabel("Thumbnail size")
+        layout.addWidget(thumbnail_label)
+        thumbnail_control = SegmentedControl(["Small", "Medium", "Large"], segment_width=100)
+        thumbnail_control.setCurrentValue(_THUMBNAIL_SIZE_LABELS[settings_module.thumbnail_size()])
+        toggle_row = QHBoxLayout()
+        toggle_row.addWidget(thumbnail_control)
+        toggle_row.addStretch(1)
+        layout.addLayout(toggle_row)
+        thumbnail_control.changed.connect(
+            lambda label: self._set_thumbnail_size(_THUMBNAIL_SIZE_KEYS[label])
+        )
+
+        layout.addSpacing(14)
+        compress_label = SectionLabel("Default compression level")
+        layout.addWidget(compress_label)
+        compress_control = SegmentedControl(["Best", "Balanced", "Maximum"], segment_width=100)
+        compress_control.setCurrentValue(
+            _COMPRESS_LEVEL_LABELS[settings_module.default_compress_level()]
+        )
+        compress_row = QHBoxLayout()
+        compress_row.addWidget(compress_control)
+        compress_row.addStretch(1)
+        layout.addLayout(compress_row)
+        compress_control.changed.connect(
+            lambda label: self._set_default_compress_level(_COMPRESS_LEVEL_KEYS[label])
+        )
+
+        layout.addSpacing(14)
+        appearance_label = SectionLabel("Appearance")
+        layout.addWidget(appearance_label)
+
+        theme_toggle = ThemeToggle()
+        theme_toggle.setChecked(settings_module.dark_mode())
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(theme_toggle)
+        theme_row.addStretch(1)
+        layout.addLayout(theme_row)
+
+        layout.addSpacing(6)
+        nothing_else = QLabel(
+            "These preferences are the only things ModPDF remembers — nothing "
+            "about a document, or what you last opened, is ever saved."
+        )
+        nothing_else.setWordWrap(True)
+        nothing_else.setStyleSheet(f"color: {theme.INK_3}; font-size: 11px;")
+        layout.addWidget(nothing_else)
+
+        def on_toggled(dark: bool) -> None:
+            settings_module.set_dark_mode(dark)
+            self._apply_theme(dark=dark)
+            # The dialog itself sits outside the window's central widget, so
+            # `_apply_theme`'s rebuild never touches it — restyle its own
+            # chrome by hand instead of tearing down a dialog the user is
+            # actively looking at.
+            dialog.setStyleSheet(theme.stylesheet())
+            for label in (thumbnail_label, compress_label, appearance_label):
+                label.refresh_theme()
+            for control in (thumbnail_control, compress_control, theme_toggle):
+                control.refresh_theme()
+            nothing_else.setStyleSheet(f"color: {theme.INK_3}; font-size: 11px;")
+
+        theme_toggle.toggled.connect(on_toggled)
+
+        layout.addSpacing(4)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+
+        dialog.exec()
+
+    def _set_thumbnail_size(self, size: settings_module.ThumbnailSize) -> None:
+        """Apply a new grid thumbnail size immediately: resize the grid's
+        icons and, for an already-open document, throw away the cached
+        thumbnails and re-render at the new width rather than stretch the
+        old ones — a stretched 112px placeholder standing in for a 232px
+        tile would look visibly soft next to its neighbours."""
+        settings_module.set_thumbnail_size(size)
+        width = _THUMBNAIL_WIDTHS[size]
+        if width == self._thumbnail_width:
+            return
+        self._thumbnail_width = width
+        self.grid.setIconSize(QSize(width, round(width * 11 / 8.5)))
+        if self.session is not None:
+            self._thumbnails.clear()
+            self._populate_grid()
+
+    def _set_default_compress_level(self, level: Level) -> None:
+        """Persist the new default and, if the Compress panel is already
+        open, move its own radio to match — the same "don't leave an open
+        panel out of sync with the setting that just changed" rule
+        `_apply_theme` follows for the whole window."""
+        settings_module.set_default_compress_level(level)
+        self._level_radios[level].setChecked(True)
+
+    def _apply_theme(self, *, dark: bool) -> None:
+        """Re-theme the whole window right now, instead of at the next
+        launch. Nearly every colour in this window is either read fresh from
+        `theme.*` inside `_build_chrome` (an icon, a baked stylesheet
+        string) or reached through the cascade from `self.setStyleSheet`
+        below — so the simplest *correct* way to repaint all of it is to run
+        that same construction again, rather than track down every place a
+        colour got baked in one at a time and risk missing one.
+
+        What a fresh `_build_chrome` cannot know how to reconstruct on its
+        own — which panel was open, the split ranges, the compress choice,
+        the page selection — is captured first and reapplied after.
+        """
+        theme.set_mode(dark=dark)
+        self.setStyleSheet(theme.stylesheet())
+
+        current_panel = next(
+            (key for key, button in self.tool_buttons.items() if button.isChecked()),
+            "pages",
+        )
+        ranges = [row.value() for row in self._range_rows]
+        lossless = self.compress_lossless_radio.isChecked()
+        level = self.compress_level_choice()
+        selected_positions = self._selected_positions()
+
+        old_central = self.takeCentralWidget()
+        self._build_chrome()
+        if old_central is not None:
+            old_central.deleteLater()
+
+        if self.session is not None:
+            self.stack.setCurrentIndex(1)
+            self._populate_grid()
+            for position in selected_positions:
+                item = self.grid.item(position)
+                if item is not None:
+                    item.setSelected(True)
+            for start, end in ranges:
+                self._add_range_row(start, end)
+
+        self.compress_visual_radio.setChecked(not lossless)
+        self.compress_lossless_radio.setChecked(lossless)
+        self._level_radios[level].setChecked(True)
+        self._show_panel(current_panel)
+        self._refresh()
+
+    def _show_help(self) -> None:
+        QMessageBox.information(
+            self,
+            "About ModPDF",
+            f"ModPDF {__version__}\n\n"
+            "Split, merge, reorder and compress PDFs on your own machine. "
+            "Nothing is uploaded, and this window cannot open a network "
+            "connection — it removed that ability from itself at startup.\n\n"
+            "See THREAT_MODEL.md and SECURITY.md in the project for what "
+            "that guarantee does and does not cover.",
+        )
 
     # --------------------------------------------------------------- opening
 
@@ -645,7 +976,7 @@ class MainWindow(QMainWindow):
 
         self.grid.blockSignals(True)
         self.grid.clear()
-        blank = placeholder()
+        blank = placeholder(self._thumbnail_width)
         for position, page in enumerate(session.order):
             item = QListWidgetItem(f"{position + 1}")
             item.setData(PAGE_ROLE, page)
@@ -656,7 +987,7 @@ class MainWindow(QMainWindow):
 
         for page in dict.fromkeys(session.order):
             if page not in self._thumbnails:
-                self.renderer.render(page, THUMBNAIL_WIDTH)
+                self.renderer.render(page, self._thumbnail_width)
 
         # Any edit changes how many pages there are; range spin boxes must
         # never let someone set an end beyond what the document now has.
@@ -975,11 +1306,17 @@ class MainWindow(QMainWindow):
         if key == "split":
             self._refresh_split_preview()
 
-    def _add_range_row(self) -> None:
-        """Add a range row, defaulting to start right after the last one ends."""
+    def _add_range_row(self, start: int | None = None, end: int | None = None) -> None:
+        """Add a range row. With no explicit start/end, default to right
+        after the last row's end — the "+ Add range" behaviour. Explicit
+        values are for `_apply_theme`, restoring exactly what was there
+        before the panel got rebuilt."""
         maximum = self.session.pages if self.session is not None else 1
-        start = min(self._range_rows[-1].value()[1] + 1, maximum) if self._range_rows else 1
-        row = RangeRow(maximum, start=start, end=start)
+        if start is None:
+            start = min(self._range_rows[-1].value()[1] + 1, maximum) if self._range_rows else 1
+        if end is None:
+            end = start
+        row = RangeRow(maximum, start=start, end=end)
         row.changed.connect(self._refresh_split_preview)
         row.removed.connect(self._remove_range_row)
         self._range_rows.append(row)
@@ -1045,6 +1382,7 @@ class MainWindow(QMainWindow):
 
         for button in (self.extract_button, self.delete_button, self.duplicate_button):
             button.setEnabled(has_document and selected > 0 and not self._busy)
+        self.selection_hint.setVisible(selected == 0)
         self.save_button.setEnabled(has_document and not self._busy)
         self.revert_button.setEnabled(session is not None and session.modified and not self._busy)
         for button in self.tool_buttons.values():
@@ -1056,6 +1394,9 @@ class MainWindow(QMainWindow):
             self.safety_chip.hide()
             self.review_button.hide()
             self.hint_label.setText("")
+            self.doc_status_label.setText("No document open")
+            for value_label in self.doc_fact_values.values():
+                value_label.setText("—")
             if not self._busy:
                 self._say("")
             return
@@ -1075,12 +1416,11 @@ class MainWindow(QMainWindow):
             self.safety_chip.show_state("Nothing notable", tone="good")
             self.review_button.hide()
 
-        self.document_facts.setText(
-            f"{session.source_pages} pages · {size_mb:.1f} MB · PDF "
-            f"{session.inspection.pdf_version}<br>"
-            f"{session.inspection.image_count} images · "
-            f"{'encrypted' if session.inspection.encrypted else 'not encrypted'}"
-        )
+        self.doc_status_label.setText(session.path.name)
+        self.doc_fact_values["name"].setText(session.path.name)
+        self.doc_fact_values["pages"].setText(str(session.source_pages))
+        self.doc_fact_values["size"].setText(_human_size(session.inspection.size_bytes))
+        self.doc_fact_values["version"].setText(session.inspection.pdf_version)
         self.findings_label.setText(self._findings_html(session))
 
         if not self._busy:
@@ -1163,3 +1503,15 @@ def _human_size(count: int) -> str:
             return f"{size:.{precision}f} {unit}"
         size /= 1024
     return f"{size:.1f} GB"
+
+
+def _chrome_button(icon_name: str, label: str) -> QPushButton:
+    """A flat, borderless icon+text button for the header's own corner —
+    distinct from a toolbar tool or a panel action, so it gets its own,
+    unstyled-by-default look rather than borrowing #Tool or #Primary."""
+    button = QPushButton(f" {label}")
+    button.setObjectName("Chrome")
+    button.setIcon(icons.icon(icon_name, size=13, color=theme.INK_2))
+    button.setIconSize(QSize(13, 13))
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    return button
