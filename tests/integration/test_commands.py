@@ -276,9 +276,7 @@ class TestCompress:
 
         assert high_out.stat().st_size < balanced_out.stat().st_size
 
-    def test_level_high_can_be_larger_than_balanced_on_a_plain_photo(
-        self, tmp_path: Path
-    ) -> None:
+    def test_level_high_can_be_larger_than_balanced_on_a_plain_photo(self, tmp_path: Path) -> None:
         """A known, accepted cost of keeping "high"'s own image settings
         close to lossless (so a flattened page's text stays legible): on a
         document with no heavy vector page to flatten, "high" has nothing

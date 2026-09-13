@@ -303,7 +303,7 @@ class TestCompressionLevels:
         assert low.jpeg_quality > balanced.jpeg_quality
 
     def test_high_keeps_its_own_images_close_to_lossless_by_choice(self) -> None:
-        """"high"'s target DPI and JPEG quality are deliberately *not* the
+        """ "high"'s target DPI and JPEG quality are deliberately *not* the
         most aggressive of the three: they were raised, on a real document,
         until a flattened page's own text was legible again. Its size
         reduction comes from `always_recompress` and `flatten_vector_pages`
