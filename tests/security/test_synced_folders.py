@@ -114,7 +114,9 @@ class TestTheWarningReachesTheUser:
     ) -> None:
         source = make_pdf(4)
         out_dir = fake_home / "Dropbox" / "pieces"
-        result = runner.invoke(app, ["split", str(source), "--every", "2", "-o", str(out_dir)])
+        result = runner.invoke(
+            app, ["split", str(source), "--pages", "1-2,3-4", "-o", str(out_dir)]
+        )
         assert result.exit_code == 0
         assert "Dropbox will upload it" in plain_cli_output(result.output)
 

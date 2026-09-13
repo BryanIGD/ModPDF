@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-__all__ = ["Piece", "chunks", "plan_pieces"]
+__all__ = ["Piece", "plan_pieces"]
 
 
 @dataclass(frozen=True)
@@ -24,19 +24,6 @@ class Piece:
     @property
     def page_count(self) -> int:
         return len(self.indices)
-
-
-def chunks(page_count: int, size: int) -> list[list[int]]:
-    """Break a document into consecutive runs of ``size`` pages.
-
-    The final run is short if the pages do not divide evenly, which is what
-    everyone expects and nobody says out loud.
-    """
-    if size < 1:
-        raise ValueError("chunk size must be at least 1 page")
-    return [
-        list(range(start, min(start + size, page_count))) for start in range(0, page_count, size)
-    ]
 
 
 def plan_pieces(stem: str, groups: Sequence[Sequence[int]]) -> list[Piece]:

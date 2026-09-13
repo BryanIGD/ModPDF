@@ -129,7 +129,7 @@ class TestRealWorkStillWorks:
         source = make_pdf(9, name="doc.pdf")
         with netguard.denied():
             result = runner.invoke(
-                app, ["split", str(source), "--every", "3", "-o", str(tmp_path / "out")]
+                app, ["split", str(source), "--pages", "1-3,4-6,7-9", "-o", str(tmp_path / "out")]
             )
         assert result.exit_code == 0
         pieces = sorted((tmp_path / "out").iterdir())

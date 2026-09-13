@@ -23,7 +23,7 @@ from modpdf.document import DocumentError, EncryptedDocumentError
 from modpdf.inspection import Inspection
 from modpdf.ops.compress import DEFAULT_LEVEL, CompressReport, Level, Mode
 from modpdf.ops.sanitize import SanitizeReport
-from modpdf.ops.split import Piece, chunks, plan_pieces
+from modpdf.ops.split import Piece, plan_pieces
 from modpdf.pagespec import PageSpecError, parse_pagespec, parse_pagespec_groups
 from modpdf.security import netguard, secrets
 from modpdf.security.fs import FileSystemError, synced_location
@@ -148,15 +148,12 @@ def split(
     source: Annotated[Path, typer.Argument(help="The PDF to split.")],
     output_dir: Annotated[Path, typer.Option("--out", "-o", help="Directory for the pieces.")],
     pages: Annotated[
-        str | None,
+        str,
         typer.Option(
             "--pages",
             help="Page groups; each comma-separated group becomes one file, e.g. 1-3,7,12-",
         ),
-    ] = None,
-    every: Annotated[
-        int | None, typer.Option("--every", help="Split into consecutive runs of this many pages.")
-    ] = None,
+    ],
     force: Annotated[bool, typer.Option("--force", help="Overwrite existing files.")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be written.")] = False,
     password_stdin: Annotated[
@@ -165,14 +162,10 @@ def split(
 ) -> None:
     """Split one PDF into several."""
     with reporting():
-        if (pages is None) == (every is None):
-            raise ValueError("choose exactly one of --pages or --every")
 
         def plan_and_split(password: str | None) -> tuple[int, list[Piece]]:
             count = tasks.page_count(source, password=password)
-            groups = (
-                parse_pagespec_groups(pages, count) if pages is not None else chunks(count, every)  # type: ignore[arg-type]
-            )
+            groups = parse_pagespec_groups(pages, count)
             pieces = plan_pieces(source.stem, groups)
             if dry_run:
                 return count, pieces

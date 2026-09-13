@@ -112,7 +112,7 @@ class TestCommandsOnEncryptedDocuments:
     def test_split(self, locked: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(secrets.ENVIRONMENT_VARIABLE, PASSWORD)
         result = runner.invoke(
-            app, ["split", str(locked), "--every", "3", "-o", str(tmp_path / "out")]
+            app, ["split", str(locked), "--pages", "1-3,4-6", "-o", str(tmp_path / "out")]
         )
         assert result.exit_code == 0
         pieces = sorted((tmp_path / "out").iterdir())

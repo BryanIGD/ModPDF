@@ -14,14 +14,12 @@ import tempfile
 from pathlib import Path
 
 import pikepdf
-import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from modpdf.document import save_pdf
 from modpdf.ops.merge import merge_documents
 from modpdf.ops.select import select_pages
-from modpdf.ops.split import chunks
 from tests.conftest import build_pdf, page_markers
 
 # Generating real PDFs is not free, so keep documents small and example counts
@@ -31,6 +29,17 @@ settled = settings(
     max_examples=25,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
+
+
+def _consecutive_groups(page_count: int, size: int) -> list[list[int]]:
+    """Partition `range(page_count)` into consecutive runs of `size`, the last
+    one short if it does not divide evenly. A test-only stand-in for the
+    partitions `--pages` can produce, just shaped to be easy to generate here —
+    the round-trip property below only needs *some* partition, not this one
+    specifically."""
+    return [
+        list(range(start, min(start + size, page_count))) for start in range(0, page_count, size)
+    ]
 
 
 @given(
@@ -46,7 +55,7 @@ def test_split_then_merge_reproduces_the_original_order(page_count: int, size: i
         with pikepdf.open(source) as pdf:
             pieces = [
                 save_pdf(select_pages(pdf, group), workspace / f"piece{n}.pdf")
-                for n, group in enumerate(chunks(page_count, size))
+                for n, group in enumerate(_consecutive_groups(page_count, size))
             ]
 
         if len(pieces) == 1:
@@ -96,20 +105,3 @@ def test_a_permutation_followed_by_its_inverse_is_the_original(
             restored = save_pdf(select_pages(pdf, inverse), workspace / "restored.pdf")
 
         assert page_markers(restored) == list(range(1, page_count + 1))
-
-
-@given(
-    page_count=st.integers(min_value=1, max_value=8),
-    size=st.integers(min_value=1, max_value=8),
-)
-def test_chunks_cover_every_page_exactly_once(page_count: int, size: int) -> None:
-    """A pure property of the chunking itself — no PDFs needed, so no limits."""
-    groups = chunks(page_count, size)
-    assert [index for group in groups for index in group] == list(range(page_count))
-    assert all(groups), "no chunk may be empty"
-    assert all(len(group) == size for group in groups[:-1]), "only the last chunk may be short"
-
-
-def test_chunk_size_must_be_positive() -> None:
-    with pytest.raises(ValueError, match="at least 1"):
-        chunks(10, 0)

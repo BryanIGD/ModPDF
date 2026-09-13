@@ -17,9 +17,8 @@ from pathlib import Path
 
 from modpdf import tasks
 from modpdf.inspection import Inspection
-from modpdf.ops.split import chunks
 
-__all__ = ["Session", "chunk_positions", "load", "positions_to_groups"]
+__all__ = ["Session", "load", "positions_to_groups"]
 
 
 @dataclass
@@ -120,24 +119,12 @@ class Session:
         )
 
 
-def chunk_positions(order: Sequence[int], size: int) -> list[list[int]]:
-    """Split the grid's current order into consecutive runs of `size` pages.
-
-    Groups come out as source page indices — what `plan_pieces` and
-    `tasks.split_document` expect — but the runs themselves are counted
-    against `order`, the pages as currently shown, not the file on disk. So
-    splitting after a drag divides the document the way it now looks, which is
-    the only reading that will not surprise someone who just rearranged it.
-    """
-    return [[order[position] for position in group] for group in chunks(len(order), size)]
-
-
 def positions_to_groups(order: Sequence[int], ranges: Sequence[tuple[int, int]]) -> list[list[int]]:
     """Turn 1-based (start, end) position ranges into source-page-index groups.
 
-    Each range is inclusive and 1-based, and — like `chunk_positions` — counted
-    against the grid's current order: "1 to 3" means the first three tiles
-    shown right now, whatever original pages they hold.
+    Each range is inclusive and 1-based, and counted against the grid's
+    current order: "1 to 3" means the first three tiles shown right now,
+    whatever original pages they hold.
 
     A reversed pair is swapped rather than refused. The command line's page
     spec parser treats a backwards range ("5-1") as a mistake worth a warning,

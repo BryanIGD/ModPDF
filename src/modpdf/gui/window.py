@@ -25,7 +25,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
-    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -36,7 +35,7 @@ from modpdf.document import EncryptedDocumentError
 from modpdf.gui import session as session_module
 from modpdf.gui import theme, workers
 from modpdf.gui.grid import PAGE_ROLE, PageGrid
-from modpdf.gui.session import Session, chunk_positions, positions_to_groups
+from modpdf.gui.session import Session, positions_to_groups
 from modpdf.gui.thumbnails import THUMBNAIL_WIDTH, ThumbnailRenderer, placeholder
 from modpdf.gui.widgets import Chip, RangeRow, SectionLabel, mark_pixmap
 from modpdf.ops.compress import DEFAULT_LEVEL, CompressReport, Level, Mode
@@ -303,41 +302,20 @@ class MainWindow(QMainWindow):
         layout.addWidget(SectionLabel("How to divide it"))
 
         self._range_rows: list[RangeRow] = []
-        self.split_mode = QButtonGroup(page)
-
-        every_row = QHBoxLayout()
-        self.split_every_radio = QRadioButton("Every")
-        self.split_every_radio.setChecked(True)
-        self.split_mode.addButton(self.split_every_radio)
-        every_row.addWidget(self.split_every_radio)
-        self.split_size = QSpinBox()
-        self.split_size.setRange(1, 10000)
-        self.split_size.setValue(10)
-        self.split_size.valueChanged.connect(self._refresh_split_preview)
-        every_row.addWidget(self.split_size)
-        every_row.addWidget(QLabel("pages"))
-        every_row.addStretch(1)
-        layout.addLayout(every_row)
-
-        self.split_ranges_radio = QRadioButton("Choose ranges")
-        self.split_mode.addButton(self.split_ranges_radio)
-        layout.addWidget(self.split_ranges_radio)
-        self.split_mode.buttonClicked.connect(self._split_mode_changed)
 
         self.ranges_container = QWidget()
         self.ranges_layout = QVBoxLayout(self.ranges_container)
-        self.ranges_layout.setContentsMargins(20, 4, 0, 4)
+        self.ranges_layout.setContentsMargins(0, 4, 0, 4)
         self.ranges_layout.setSpacing(6)
         layout.addWidget(self.ranges_container)
 
         self.add_range_button = QPushButton("+ Add range")
         self.add_range_button.clicked.connect(lambda: self._add_range_row())
         add_row = QHBoxLayout()
-        add_row.setContentsMargins(20, 0, 0, 0)
+        add_row.setContentsMargins(0, 0, 0, 0)
         add_row.addWidget(self.add_range_button)
         add_row.addStretch(1)
         layout.addLayout(add_row)
-        self._set_ranges_visible(False)
 
         layout.addSpacing(8)
         layout.addWidget(SectionLabel("Will write"))
@@ -349,7 +327,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.split_preview)
         layout.addStretch(1)
 
-        button = QPushButton("Choose folder…")
+        button = QPushButton("Split and save…")
         button.setObjectName("Primary")
         button.clicked.connect(self.split_document)
         layout.addWidget(button)
@@ -997,17 +975,6 @@ class MainWindow(QMainWindow):
         if key == "split":
             self._refresh_split_preview()
 
-    def _split_mode_changed(self) -> None:
-        self._set_ranges_visible(self.split_ranges_radio.isChecked())
-        self._refresh_split_preview()
-
-    def _set_ranges_visible(self, visible: bool) -> None:
-        self.split_size.setEnabled(not visible)
-        self.ranges_container.setVisible(visible)
-        self.add_range_button.setVisible(visible)
-        if visible and not self._range_rows:
-            self._add_range_row()
-
     def _add_range_row(self) -> None:
         """Add a range row, defaulting to start right after the last one ends."""
         maximum = self.session.pages if self.session is not None else 1
@@ -1034,10 +1001,7 @@ class MainWindow(QMainWindow):
             row.setParent(None)
             row.deleteLater()
         self._range_rows.clear()
-        self.split_every_radio.setChecked(True)
-        if self.session is not None:
-            self.split_size.setValue(min(10, self.session.pages))
-        self._set_ranges_visible(False)
+        self._add_range_row()
 
     def _sync_range_maximums(self) -> None:
         """Keep range spin boxes from allowing more pages than currently exist."""
@@ -1056,10 +1020,8 @@ class MainWindow(QMainWindow):
         session = self.session
         if session is None:
             return []
-        if self.split_ranges_radio.isChecked():
-            ranges = [row.value() for row in self._range_rows]
-            return positions_to_groups(session.order, ranges)
-        return chunk_positions(session.order, self.split_size.value())
+        ranges = [row.value() for row in self._range_rows]
+        return positions_to_groups(session.order, ranges)
 
     def _refresh_split_preview(self) -> None:
         session = self.session

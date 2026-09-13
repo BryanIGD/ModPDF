@@ -38,15 +38,15 @@ commands as they currently run.
 ## What works
 
 ```
-$ modpdf split report.pdf --every 10 -o chapters/
+$ modpdf split report.pdf --pages 1-10,11-20,21- -o chapters/
 23 pages → 3 files in chapters
   report-p001-010.pdf  10 pages
   report-p011-020.pdf  10 pages
   report-p021-023.pdf  3 pages
 ```
 
-Each comma-separated group in `--pages` becomes its own file, and `--dry-run`
-shows the plan before anything is written:
+Each comma-separated group becomes its own file, and `--dry-run` shows the
+plan before anything is written:
 
 ```
 $ modpdf split report.pdf --pages 1-5,20- -o parts/ --dry-run

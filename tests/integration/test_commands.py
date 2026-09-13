@@ -23,9 +23,9 @@ def run(*args: str | Path) -> Result:
 
 
 class TestSplit:
-    def test_every_n_pages(self, make_pdf: PageMaker, tmp_path: Path) -> None:
+    def test_consecutive_runs_via_pages(self, make_pdf: PageMaker, tmp_path: Path) -> None:
         source = make_pdf(23, name="contract.pdf")
-        result = run("split", source, "--every", "10", "-o", tmp_path / "out")
+        result = run("split", source, "--pages", "1-10,11-20,21-", "-o", tmp_path / "out")
         assert result.exit_code == 0
 
         pieces = sorted((tmp_path / "out").iterdir())
@@ -47,7 +47,7 @@ class TestSplit:
 
     def test_dry_run_writes_nothing(self, make_pdf: PageMaker, tmp_path: Path) -> None:
         source = make_pdf(10)
-        result = run("split", source, "--every", "5", "-o", tmp_path / "out", "--dry-run")
+        result = run("split", source, "--pages", "1-5,6-", "-o", tmp_path / "out", "--dry-run")
         assert result.exit_code == 0
         assert not (tmp_path / "out").exists()
 
@@ -55,18 +55,16 @@ class TestSplit:
     def test_split_directory_is_private(self, make_pdf: PageMaker, tmp_path: Path) -> None:
         """Pieces of a confidential document should not be world-readable."""
         source = make_pdf(4)
-        run("split", source, "--every", "2", "-o", tmp_path / "out")
+        run("split", source, "--pages", "1-2,3-4", "-o", tmp_path / "out")
         assert (tmp_path / "out").stat().st_mode & 0o077 == 0
         for piece in (tmp_path / "out").iterdir():
             assert piece.stat().st_mode & 0o077 == 0
 
-    def test_needs_exactly_one_mode(self, make_pdf: PageMaker, tmp_path: Path) -> None:
+    def test_pages_is_required(self, make_pdf: PageMaker, tmp_path: Path) -> None:
         source = make_pdf(10)
-        both = run("split", source, "--every", "5", "--pages", "1-2", "-o", tmp_path / "o")
-        neither = run("split", source, "-o", tmp_path / "o")
-        assert both.exit_code == 1
-        assert neither.exit_code == 1
-        assert "exactly one" in plain_cli_output(both.output)
+        result = run("split", source, "-o", tmp_path / "o")
+        assert result.exit_code != 0
+        assert "--pages" in plain_cli_output(result.output)
 
 
 class TestMerge:

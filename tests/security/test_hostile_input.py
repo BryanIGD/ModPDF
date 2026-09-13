@@ -120,7 +120,7 @@ class TestFailureLeavesNothingBehind:
         args = (
             ["reorder", str(source), "--order", "1", "-o", str(target / "x.pdf")]
             if command == "reorder"
-            else ["split", str(source), "--every", "2", "-o", str(target)]
+            else ["split", str(source), "--pages", "1-2", "-o", str(target)]
         )
         target.mkdir()
 
