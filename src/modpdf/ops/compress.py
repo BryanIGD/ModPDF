@@ -187,9 +187,21 @@ LEVELS: dict[Level, LevelSettings] = {
         flatten_target_dpi=350,
         flatten_jpeg_quality=100,
     ),
+    # target_dpi/jpeg_quality are deliberately close to lossless — raised
+    # from more aggressive values after a real flattened diagram page came
+    # back with its own small text illegible. The accepted cost, kept
+    # intentionally rather than tuned away: on a document with no heavy
+    # vector page to flatten (an ordinary photo or scan), "high" recompresses
+    # its images at essentially their own quality and can come out *larger*
+    # than "balanced", whose own lower JPEG quality still shrinks a plain
+    # photo normally. "high" is a promise about what happens when there is
+    # vector content worth flattening, not a blanket "always the smallest"
+    # guarantee — see `test_high_can_end_up_larger_than_balanced_on_a_plain_photo`
+    # in the test suite, which exists to catch this drifting silently rather
+    # than to hide it.
     "high": LevelSettings(
-        target_dpi=150,
-        jpeg_quality=78,
+        target_dpi=220,
+        jpeg_quality=100,
         max_differing_fraction=0.45,
         max_single_pixel_delta=250,
         always_recompress=True,

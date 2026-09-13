@@ -297,10 +297,44 @@ class TestCompressionLevels:
         assert balanced.max_differing_fraction == DEFAULT_MAX_DIFFERING_FRACTION
         assert balanced.max_single_pixel_delta == DEFAULT_MAX_SINGLE_PIXEL_DELTA
 
-    def test_low_is_the_least_aggressive_and_high_the_most(self) -> None:
-        low, balanced, high = LEVELS["low"], LEVELS["balanced"], LEVELS["high"]
-        assert low.target_dpi > balanced.target_dpi > high.target_dpi
-        assert low.jpeg_quality > balanced.jpeg_quality > high.jpeg_quality
+    def test_low_is_gentler_than_balanced_on_raw_image_settings(self) -> None:
+        low, balanced = LEVELS["low"], LEVELS["balanced"]
+        assert low.target_dpi > balanced.target_dpi
+        assert low.jpeg_quality > balanced.jpeg_quality
+
+    def test_high_keeps_its_own_images_close_to_lossless_by_choice(self) -> None:
+        """"high"'s target DPI and JPEG quality are deliberately *not* the
+        most aggressive of the three: they were raised, on a real document,
+        until a flattened page's own text was legible again. Its size
+        reduction comes from `always_recompress` and `flatten_vector_pages`
+        instead — see `test_high_can_end_up_larger_than_balanced_on_a_plain_photo`
+        for the accepted cost of that choice."""
+        balanced, high = LEVELS["balanced"], LEVELS["high"]
+        assert high.target_dpi >= balanced.target_dpi
+        assert high.jpeg_quality >= balanced.jpeg_quality
+
+    def test_high_can_end_up_larger_than_balanced_on_a_plain_photo(self, tmp_path: Path) -> None:
+        """A known, accepted cost of keeping "high"'s own images close to
+        lossless (see the test above): on a document with no heavy vector
+        page to flatten — an ordinary photo or scan, most real documents —
+        "high" has nothing left to win on, while "balanced"'s own lower JPEG
+        quality still recompresses the image normally. "Maximum compression"
+        is not a blanket promise of the smallest possible file on every
+        document; it is a promise about what it does when there is vector
+        content worth flattening. If this ever starts passing, the images
+        pass changed enough that the CLI's "note" about traded-away quality,
+        and the README's framing of `high`, should be revisited."""
+        source = build_photo_pdf(tmp_path / "photo.pdf")
+        _, balanced = compress_file(source)
+        _, high = compress_file(
+            source,
+            target_dpi=LEVELS["high"].target_dpi,
+            jpeg_quality=LEVELS["high"].jpeg_quality,
+            max_differing_fraction=LEVELS["high"].max_differing_fraction,
+            max_single_pixel_delta=LEVELS["high"].max_single_pixel_delta,
+            always_recompress=True,
+        )
+        assert high.after_bytes > balanced.after_bytes
 
     def test_only_high_widens_the_quality_gate(self) -> None:
         """ "low" and "balanced" promise no visible loss, so neither has any
@@ -380,12 +414,13 @@ class TestFlatteningComplexVectorPages:
     def test_a_heavy_vector_page_shrinks_with_text_intact(self, tmp_path: Path) -> None:
         import pypdfium2
 
-        # More shapes than this class's other tests: "high"'s target DPI and
-        # JPEG quality were both raised (to keep a flattened page legible),
-        # which means the flattened background wins by a smaller margin than
-        # it used to — a page has to have genuinely heavy vector content
-        # before flattening it is worth it, which is exactly the point.
-        source = build_dense_diagram_pdf(tmp_path / "diagram.pdf", shapes=20000)
+        # More shapes than this class's other tests: "high" keeps its own
+        # target DPI and JPEG quality close to lossless (220/100) so a
+        # flattened page stays sharp, which means the flattened background
+        # only wins over the original once the page's vector content is
+        # heavy enough — a much higher bar than a lower-quality flatten would
+        # need, which is exactly the point of choosing near-lossless settings.
+        source = build_dense_diagram_pdf(tmp_path / "diagram.pdf", shapes=80000)
         # This test uses "high"'s own settings end to end, not only the flag
         # under test: at this file's much gentler defaults (200 DPI, quality
         # 82, the strict gate), the flattened background does not beat the

@@ -144,28 +144,27 @@ falls back to a lossless result instead and says so — the worst case is a file
 smaller than you hoped for, never one that looks worse.
 
 `--level` picks how hard to push that trade-off, rather than leaving you to
-guess at a DPI number: `low` barely touches anything, `balanced` (the
-default) is a sensible middle ground, and `high` accepts some visible
-softening in exchange for a meaningfully smaller file:
+guess at a DPI number: `low` barely touches anything, and `balanced` (the
+default) is a sensible middle ground.
+
+`high` ("Maximum compression" in the desktop app) is tuned for a different
+job than the other two, and it is worth being direct about what it actually
+buys you. Its own image resolution and JPEG quality are deliberately kept
+close to lossless — raised on purpose after an early, more aggressive version
+made a flattened diagram's own small text hard to read — so on a document
+like the scan above, whose only large content is one image, `high` has
+little left to trade and lands close to `balanced`:
 
 ```
 $ modpdf compress deposition.pdf -o smaller.pdf --level high
-smaller.pdf  55.1 KB → 5.4 KB  (90% smaller)
-  images     1 recompressed, 0 left alone   45.3 KB → 4.2 KB
-  quality    text identical · largest visible difference 2.2% of one page   PASS
+smaller.pdf  55.1 KB → 6.0 KB  (89% smaller)
+  images     1 recompressed, 0 left alone   45.3 KB → 4.8 KB
+  quality    text identical · largest visible difference 1.9% of one page   PASS
   note       maximum compression: image quality was reduced on purpose to shrink the file further
 ```
 
-Only `high` widens what the quality gate above will accept before falling
-back — `low` and `balanced` both promise no visible loss, so neither has
-anything to widen. `high` also recompresses every eligible image at its own
-lower JPEG quality even when that image was already correctly sized for
-`--target-dpi`'s effective resolution, not only the oversized ones the other
-two levels touch — otherwise a document whose images were already exported at
-a reasonable size (a screen-resolution scan, say) would have nothing left for
-"maximum compression" to shrink beyond what `balanced` already did.
-
-Not every large PDF is large because of its images. A complex vector diagram
+Where `high` earns its name is a document whose bulk is not an image at all.
+Not every large PDF is large because of its images: a complex vector diagram
 — thousands of curves and fills a design tool exported directly as drawing
 commands, not as a picture — can outweigh every image in the file combined,
 and no image setting touches it, because it is not an image. Both `balanced`
@@ -184,14 +183,19 @@ paper.pdf  2.3 MB → 1.7 MB  (26% smaller)
   quality    text identical · largest visible difference 0.1% of one page   PASS
 
 $ modpdf compress paper.pdf -o smaller.pdf --level high
-paper.pdf  2.3 MB → 953.1 KB  (59% smaller)
+paper.pdf  2.3 MB → 1.3 MB  (45% smaller)
   images     3 already at or below the target, left alone
   vector     1 page of complex vector art flattened to an image
-  quality    text identical · largest visible difference 0.3% of one page   PASS
+  quality    text identical · largest visible difference 0.5% of one page   PASS
   note       maximum compression: image quality was reduced on purpose to
              shrink the file further; text stays selectable even on a
              flattened page — only its vector art was
 ```
+
+So `high` is not a blanket "always the smallest file" promise — it is a
+promise about what happens when there is vector content worth flattening.
+On a document without any, `balanced` can legitimately win, as the scan
+example above shows.
 
 `balanced`'s flattened result is still held to the same strict, unwidened
 quality gate as the rest of what it does — the same gate that would fall the

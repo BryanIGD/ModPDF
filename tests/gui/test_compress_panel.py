@@ -140,8 +140,17 @@ class TestRunningACompression:
         self, window: MainWindow, tmp_path: Path
     ) -> None:
         """Proves the checked radio, not a hardcoded default, is what gets
-        used: "Maximum compression" must produce a smaller file than the
-        panel's own default ("Balanced") on the same source document."""
+        used: "Maximum compression" must produce a *different* result than
+        the panel's own default ("Balanced") on the same source document.
+
+        Not necessarily a smaller one — this window's fixture document is a
+        plain photo with no vector page to flatten, which is a real, accepted
+        case where "high" ends up larger than "balanced" (see
+        `test_high_can_end_up_larger_than_balanced_on_a_plain_photo` in
+        test_compress.py). What this test is actually proving is narrower:
+        that toggling the radio changes which settings reach `tasks.py`
+        at all, not which tier wins on this particular document.
+        """
         balanced_out = tmp_path / "balanced.pdf"
         run_compress(window, balanced_out)
         balanced_size = balanced_out.stat().st_size
@@ -150,7 +159,7 @@ class TestRunningACompression:
         maximum_out = tmp_path / "maximum.pdf"
         run_compress(window, maximum_out)
 
-        assert maximum_out.stat().st_size < balanced_size
+        assert maximum_out.stat().st_size != balanced_size
 
     def test_maximum_compression_says_quality_was_traded_away(
         self, window: MainWindow, tmp_path: Path
