@@ -22,6 +22,8 @@ import pytest
 from reportlab.lib.pagesizes import LETTER
 from reportlab.pdfgen import canvas
 
+from modpdf.pdfium_lock import PDFIUM_LOCK
+
 # Set before anything imports `modpdf.cli`: its Rich consoles re-measure the
 # terminal on every print, so a test asserting on captured CLI output would
 # otherwise wrap and style differently depending on whatever terminal (or
@@ -82,7 +84,16 @@ def build_pdf(path: Path, page_count: int, *, title: str | None = None) -> Path:
 
 
 def page_text(path: Path) -> list[str]:
-    """Extract the text of each page, so page identity can be asserted."""
+    """Extract the text of each page, so page identity can be asserted.
+
+    Holds `PDFIUM_LOCK` like every other PDFium caller: a window a GUI test
+    has open may be rendering thumbnails on its own thread at the same time.
+    """
+    with PDFIUM_LOCK:
+        return _page_text_locked(path)
+
+
+def _page_text_locked(path: Path) -> list[str]:
     document = pypdfium2.PdfDocument(path)
     try:
         return [page.get_textpage().get_text_range().strip() for page in document]

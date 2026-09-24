@@ -68,6 +68,7 @@ from PIL import Image
 from PIL.TiffImagePlugin import TiffImageFile
 
 from modpdf import verify as verify_module
+from modpdf.pdfium_lock import PDFIUM_LOCK
 
 __all__ = [
     "DEFAULT_JPEG_QUALITY",
@@ -1045,13 +1046,17 @@ def _render_page_without_text(
         buffer = io.BytesIO()
         clone.save(buffer)
         buffer.seek(0)
-        doc = pypdfium2.PdfDocument(buffer)
-        try:
-            scale = target_dpi / 72
-            rendered = doc[page_index].render(scale=scale).to_pil().convert("RGB")
-            return cast(Image.Image, rendered)
-        finally:
-            doc.close()
+        # PDFium is not thread-safe; see modpdf.pdfium_lock. The page and
+        # bitmap below are temporaries, freed within this statement, and the
+        # document is closed before the lock is released.
+        with PDFIUM_LOCK:
+            doc = pypdfium2.PdfDocument(buffer)
+            try:
+                scale = target_dpi / 72
+                rendered = doc[page_index].render(scale=scale).to_pil().convert("RGB")
+                return cast(Image.Image, rendered)
+            finally:
+                doc.close()
     except Exception:
         return None
     finally:

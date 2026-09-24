@@ -37,6 +37,14 @@ sockets to use even if it tried. What it does not buy you: see below.
 - **Passwords ending up somewhere they shouldn't** — never accepted as a
   command-line argument (visible to any process via `ps`, and kept in shell
   history); only `--password-stdin` or an environment variable.
+- **A trail of what you have opened** — the desktop app keeps no
+  recent-files list and never writes a thumbnail to disk. All it keeps
+  between runs is three display preferences: light or dark, thumbnail size,
+  and the default compression level. They live in the operating system's
+  normal per-user settings location (a plist on macOS, the registry on
+  Windows, an ini file under `~/.config` on Linux). No path, file name or
+  document content is part of them, and `modpdf/gui/settings.py` is the
+  whole of what can write there.
 - **Partial or corrupted output** — every write is staged next to its
   destination and moved into place with an atomic rename, so a crash or kill
   mid-write leaves either the old file or nothing, never a truncated one that

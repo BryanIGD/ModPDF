@@ -89,6 +89,11 @@ class MainWindow(QMainWindow):
     """One document at a time, its pages, and what you can do to them."""
 
     session_changed = Signal()
+    # Requests to the thumbnail renderer, which lives on its own thread. They
+    # must go out as signals: calling the renderer's methods directly would
+    # run them on this window's thread instead. See modpdf.gui.thumbnails.
+    _open_requested = Signal(str, object)
+    _render_requested = Signal(int, int, int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -105,6 +110,10 @@ class MainWindow(QMainWindow):
         # window closes.
         self._workspace_dir: Path | None = None
         self._thumbnail_width = _THUMBNAIL_WIDTHS[settings_module.thumbnail_size()]
+        # Which batch of thumbnails is current, and which of its pages have
+        # been asked for but not delivered yet — see _new_thumbnail_generation.
+        self._thumbnail_generation = 0
+        self._pending_thumbnails: set[int] = set()
 
         self._build_chrome()
         self._start_renderer()
@@ -655,11 +664,28 @@ class MainWindow(QMainWindow):
         self._render_thread = QThread(self)
         self.renderer = ThumbnailRenderer()
         self.renderer.moveToThread(self._render_thread)
+        self._open_requested.connect(self.renderer.open)
+        self._render_requested.connect(self.renderer.render)
         self.renderer.rendered.connect(self._thumbnail_ready)
         self.renderer.failed.connect(self._say)
         self._render_thread.start()
 
-    def _thumbnail_ready(self, index: int, image: QImage) -> None:
+    def _new_thumbnail_generation(self) -> None:
+        """Forget every thumbnail, and every one still on its way.
+
+        For a new document or a new thumbnail size. Requests already queued
+        for the old generation are skipped by the renderer, and any result
+        that was mid-render when this ran is dropped by `_thumbnail_ready`.
+        """
+        self._thumbnail_generation += 1
+        self.renderer.wanted_generation = self._thumbnail_generation
+        self._thumbnails.clear()
+        self._pending_thumbnails.clear()
+
+    def _thumbnail_ready(self, generation: int, index: int, image: QImage) -> None:
+        if generation != self._thumbnail_generation:
+            return  # rendered for a document or size that is no longer shown
+        self._pending_thumbnails.discard(index)
         pixmap = QPixmap.fromImage(image)
         self._thumbnails[index] = pixmap
         for row in range(self.grid.count()):
@@ -772,7 +798,7 @@ class MainWindow(QMainWindow):
         self._thumbnail_width = width
         self.grid.setIconSize(QSize(width, round(width * 11 / 8.5)))
         if self.session is not None:
-            self._thumbnails.clear()
+            self._new_thumbnail_generation()
             self._populate_grid()
 
     def _set_default_compress_level(self, level: Level) -> None:
@@ -866,10 +892,10 @@ class MainWindow(QMainWindow):
 
     def _loaded(self, session: Session) -> None:
         self.session = session
-        self._thumbnails.clear()
+        self._new_thumbnail_generation()
         self._set_busy(False)
 
-        self.renderer.open(str(session.path), session.password)
+        self._open_requested.emit(str(session.path), session.password)
         self._reset_split_panel()
         self._populate_grid()
         self.stack.setCurrentIndex(1)
@@ -985,9 +1011,12 @@ class MainWindow(QMainWindow):
             self.grid.addItem(item)
         self.grid.blockSignals(False)
 
+        # A page already asked for is not asked for again: an edit made while
+        # the first batch is still rendering would otherwise queue it twice.
         for page in dict.fromkeys(session.order):
-            if page not in self._thumbnails:
-                self.renderer.render(page, self._thumbnail_width)
+            if page not in self._thumbnails and page not in self._pending_thumbnails:
+                self._pending_thumbnails.add(page)
+                self._render_requested.emit(self._thumbnail_generation, page, self._thumbnail_width)
 
         # Any edit changes how many pages there are; range spin boxes must
         # never let someone set an end beyond what the document now has.
@@ -1487,9 +1516,14 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: object) -> None:
-        self.renderer.close()
+        # Let anything still queued be skipped rather than rendered, stop the
+        # thread, and only then close its document — from here, once nothing
+        # can be using it. If the thread will not stop (a single page stuck
+        # inside PDFium), leave the document alone: the process is ending.
+        self.renderer.wanted_generation = -1
         self._render_thread.quit()
-        self._render_thread.wait(2000)
+        if self._render_thread.wait(5000):
+            self.renderer.close()
         if self._workspace_dir is not None:
             shutil.rmtree(self._workspace_dir, ignore_errors=True)
         super().closeEvent(event)  # type: ignore[arg-type]

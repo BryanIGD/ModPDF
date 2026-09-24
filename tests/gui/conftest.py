@@ -11,10 +11,28 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+
+
+def wait_until(condition: Callable[[], bool], *, timeout: float = 15.0) -> None:
+    """Run Qt's event loop until `condition()` holds, or fail after `timeout`.
+
+    Thumbnails render on their own thread and come back as queued signals, so
+    nothing arrives until the event loop runs — a test that needs one has to
+    let it.
+    """
+    from PySide6.QtCore import QCoreApplication, QEventLoop
+
+    deadline = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() > deadline:
+            raise AssertionError(f"condition not met within {timeout}s")
+        QCoreApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
+        time.sleep(0.01)
 
 
 @pytest.fixture(scope="session")

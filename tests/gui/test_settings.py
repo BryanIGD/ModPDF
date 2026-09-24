@@ -24,6 +24,7 @@ from modpdf.gui.session import load
 from modpdf.gui.widgets import SectionLabel, SegmentedControl, ThemeToggle
 from modpdf.gui.window import MainWindow
 from tests.conftest import PageMaker
+from tests.gui.conftest import wait_until
 
 pytestmark = pytest.mark.usefixtures("qt_app")
 
@@ -479,14 +480,13 @@ class TestThumbnailSizeApplication:
         """A stretched 112px placeholder standing in for a 232px tile would
         look visibly soft next to its neighbours — so a size change must
         clear what is cached and let it re-render at the new width, not
-        just resize the grid around the old pixmaps. (The re-render itself
-        runs synchronously here, the same as everywhere else this test suite
-        touches the renderer directly — see `ThumbnailRenderer.render`.)"""
+        just resize the grid around the old pixmaps."""
         window._loaded(load(make_pdf(3, name="report.pdf")))
         stale = QPixmap(10, 10)
         window._thumbnails[0] = stale  # pretend a thumbnail at the old size already rendered
 
         window._set_thumbnail_size("large")
+        wait_until(lambda: 0 in window._thumbnails)
 
         assert window._thumbnails[0] is not stale
         assert window._thumbnails[0].width() == 232

@@ -28,9 +28,11 @@ ModPDF is the boring, local version. Your files stay where they are.
 
 ## Status
 
-Early development. Four of seven phases are done: the three page operations,
-the security layer they rest on, and compression with the verification harness
-that makes it trustworthy.
+Early development. Five of seven phases are done: the three page operations,
+the security layer they rest on, compression with the verification harness
+that makes it trustworthy, and the desktop app. Distribution has started — a
+macOS app can be built locally (see `packaging/macos`) — but nothing is
+signed, notarized or on PyPI yet.
 
 There is no release to install. Everything below is real output from the
 commands as they currently run.
@@ -269,11 +271,22 @@ pip install modpdf[gui]
 modpdf-gui                  # or: modpdf-gui statement.pdf
 ```
 
+To build a standalone `ModPDF.app` instead, see
+[packaging/macos/README.md](packaging/macos/README.md). It is unsigned for
+now, so it runs on the machine that built it but not yet on anyone else's.
+
 Open a document and you get its pages as thumbnails: select them, drag to
 reorder, delete, duplicate, extract, split by range, compress. Nothing is
 written until you save, because the window holds your edits as an ordering of
 the original's pages rather than as a modified document — which is also why
 Revert costs nothing.
+
+**Settings**, behind the gear in the header, holds three preferences. Each
+one takes effect as soon as you change it: thumbnail size in the page grid,
+the compression level the Compress panel starts on, and light or dark. The
+compression level also follows whatever you last picked in the Compress panel
+itself, so someone who always wants "Maximum" isn't choosing it again every
+time.
 
 **Open** builds a workspace out of more than one file, without a second
 button for it: open `pdf1`, then choose `pdf2` through the same Open button
@@ -305,6 +318,10 @@ Two decisions carried over from the CLI's behaviour:
   Re-rendering on next launch is the cheaper trade.
 - **There is no recent-files list**, for the same reason: a list of paths to
   confidential documents is itself a leak.
+
+The three preferences above are all the app keeps between runs, and none of
+them is about a document. [THREAT_MODEL.md](THREAT_MODEL.md) says exactly
+where they are stored.
 
 ## Not built yet
 

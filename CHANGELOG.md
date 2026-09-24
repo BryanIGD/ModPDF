@@ -67,8 +67,7 @@ Nothing tagged yet. The first release will be 0.1.0.
   page thumbnails with selection, drag-to-reorder (tracked by the mouse
   directly rather than through Qt's own drag-and-drop, which does not
   reliably initiate a session at all), delete, duplicate, extract, split by
-  a fixed interval or by hand-built page ranges, compress, sanitize and
-  merge-by-dropping. Edits are held in memory as an ordering of the source
+  hand-built page ranges, compress, sanitize and merge-by-dropping. Edits are held in memory as an ordering of the source
   pages, so nothing is written until you save and Revert is free. Thumbnails
   are never written to disk and no recent-files list is kept.
 - The desktop app's Open button now builds a workspace out of more than one
@@ -80,7 +79,26 @@ Nothing tagged yet. The first release will be 0.1.0.
   a private, per-window `0700` scratch directory
   (`security/fs.private_scratch_dir`) that is removed when the window closes.
 
+- A Settings dialog in the desktop app, behind a gear in the header: thumbnail
+  size (small, medium or large), the compression level the Compress panel
+  starts on, and light or dark. Every choice applies immediately. Switching
+  theme rebuilds the window in place and keeps the open document, page
+  selection, active panel, split ranges and compress choice as they were.
+  The three values are stored in the operating system's own per-user
+  settings location (`modpdf/gui/settings.py`). They are the only thing the
+  app remembers between runs, and none of them is a path or anything else
+  about a document.
+- `packaging/macos/build.sh`, which builds an unsigned `ModPDF.app` with
+  PyInstaller. Its icon is generated from the same drawn mark the window
+  uses, so there is still no image asset in the repository. Signing and
+  notarization are not done yet; see `packaging/macos/README.md`.
+
 ### Changed
+
+- The desktop app's layout was redesigned: a new header and toolbar, a
+  drop-zone empty state, a document details card, and a set of line icons
+  drawn in code (`modpdf/gui/icons.py`) rather than loaded from files or an
+  icon font.
 
 - Whole operations moved into `modpdf/tasks.py`, which the command line and the
   desktop app both call. Neither interface implements a PDF operation of its own,
@@ -91,6 +109,20 @@ Nothing tagged yet. The first release will be 0.1.0.
   number in a report always matches the number on disk.
 
 ### Fixed
+
+- The desktop app rendered every page thumbnail on its own window thread, so
+  opening a large document froze the window until the last page was done.
+  The renderer had been moved to a worker thread and then called directly —
+  and a direct call runs on the caller's thread regardless. Requests now go
+  out as queued signals. Each carries a generation number, so a thumbnail
+  still arriving for a document or size that has since been replaced is
+  dropped instead of landing on the wrong tile.
+- PDFium is not thread-safe, even across unrelated documents, and the desktop
+  app could enter it from two threads at once: the thumbnail renderer, and a
+  compression running in the background whose quality gate renders every
+  page. That can crash the whole process. Every PDFium call now holds one
+  process-wide lock (`modpdf/pdfium_lock.py`). The command line is
+  single-threaded, so the lock costs it nothing.
 
 - A desktop-app background job started from inside another job's own
   completion callback — exactly what adding a second file does, by opening

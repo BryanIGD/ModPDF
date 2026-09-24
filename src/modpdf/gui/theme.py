@@ -113,11 +113,11 @@ _dark_mode = False
 
 
 def set_mode(*, dark: bool) -> None:
-    """Switch the whole module's palette. Must run before anything reads a
-    colour from it — a caller that has already built widgets from the old
-    values (baked into an f-string) will not see this update; see `app.py`,
-    which calls this before the first widget exists, and the "restart to
-    apply" note in the settings dialog, which exists for the same reason."""
+    """Switch the whole module's palette. Widgets already built from the old
+    values (baked into an f-string) will not see this update on their own —
+    which is why `app.py` calls this before the first widget exists, and why
+    `MainWindow._apply_theme` rebuilds the window after calling it rather
+    than expecting the change to reach what is already on screen."""
     global _dark_mode
     _dark_mode = dark
     globals().update(_DARK if dark else _LIGHT)

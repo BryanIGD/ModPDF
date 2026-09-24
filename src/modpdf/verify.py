@@ -52,6 +52,8 @@ import pikepdf
 import pypdfium2
 from PIL import ImageChops
 
+from modpdf.pdfium_lock import PDFIUM_LOCK
+
 __all__ = ["VerifyResult", "verify"]
 
 # A per-pixel difference at or below this, out of 255, is treated as ordinary
@@ -131,64 +133,67 @@ def verify(
             reason=f"page count changed: {len(original.pages)} to {len(candidate.pages)}",
         )
 
-    candidate_bytes = _to_bytes(candidate)
-    try:
-        reopened = pypdfium2.PdfDocument(io.BytesIO(candidate_bytes))
-        reopened.close()
-    except Exception as exc:  # pypdfium2 raises a variety of types
-        return VerifyResult(passed=False, reason=f"the result does not reopen cleanly: {exc}")
+    # PDFium is not thread-safe; see modpdf.pdfium_lock. Held until both
+    # documents are closed, which the `finally` below does before it exits.
+    with PDFIUM_LOCK:
+        candidate_bytes = _to_bytes(candidate)
+        try:
+            reopened = pypdfium2.PdfDocument(io.BytesIO(candidate_bytes))
+            reopened.close()
+        except Exception as exc:  # pypdfium2 raises a variety of types
+            return VerifyResult(passed=False, reason=f"the result does not reopen cleanly: {exc}")
 
-    original_doc = pypdfium2.PdfDocument(io.BytesIO(_to_bytes(original)))
-    candidate_doc = pypdfium2.PdfDocument(io.BytesIO(candidate_bytes))
-    try:
-        worst_page: int | None = None
-        worst_fraction = 0.0
-        worst_delta = 0
+        original_doc = pypdfium2.PdfDocument(io.BytesIO(_to_bytes(original)))
+        candidate_doc = pypdfium2.PdfDocument(io.BytesIO(candidate_bytes))
+        try:
+            worst_page: int | None = None
+            worst_fraction = 0.0
+            worst_delta = 0
 
-        for index in range(len(original_doc)):
-            before_text = _normalize(_page_text(original_doc[index]))
-            after_text = _normalize(_page_text(candidate_doc[index]))
-            if before_text != after_text:
-                return VerifyResult(
-                    passed=False, reason=f"page {index + 1}: text changed", worst_page=index
+            for index in range(len(original_doc)):
+                before_text = _normalize(_page_text(original_doc[index]))
+                after_text = _normalize(_page_text(candidate_doc[index]))
+                if before_text != after_text:
+                    return VerifyResult(
+                        passed=False, reason=f"page {index + 1}: text changed", worst_page=index
+                    )
+
+                fraction, delta = _pixel_difference(
+                    original_doc[index], candidate_doc[index], render_dpi, noise_threshold
                 )
+                if fraction > worst_fraction:
+                    worst_fraction, worst_page = fraction, index
+                worst_delta = max(worst_delta, delta)
 
-            fraction, delta = _pixel_difference(
-                original_doc[index], candidate_doc[index], render_dpi, noise_threshold
+                if delta > max_single_pixel_delta:
+                    return VerifyResult(
+                        passed=False,
+                        reason=f"page {index + 1}: a region differs almost completely "
+                        f"(peak difference {delta}/255)",
+                        worst_page=index,
+                        max_pixel_delta=delta,
+                        differing_fraction=fraction,
+                    )
+                if fraction > max_differing_fraction:
+                    return VerifyResult(
+                        passed=False,
+                        reason=f"page {index + 1}: {fraction * 100:.1f}% of pixels changed "
+                        f"visibly, above the {max_differing_fraction * 100:.0f}% limit",
+                        worst_page=index,
+                        max_pixel_delta=delta,
+                        differing_fraction=fraction,
+                    )
+
+            return VerifyResult(
+                passed=True,
+                reason="text identical; visual difference within limits",
+                worst_page=worst_page,
+                max_pixel_delta=worst_delta,
+                differing_fraction=worst_fraction,
             )
-            if fraction > worst_fraction:
-                worst_fraction, worst_page = fraction, index
-            worst_delta = max(worst_delta, delta)
-
-            if delta > max_single_pixel_delta:
-                return VerifyResult(
-                    passed=False,
-                    reason=f"page {index + 1}: a region differs almost completely "
-                    f"(peak difference {delta}/255)",
-                    worst_page=index,
-                    max_pixel_delta=delta,
-                    differing_fraction=fraction,
-                )
-            if fraction > max_differing_fraction:
-                return VerifyResult(
-                    passed=False,
-                    reason=f"page {index + 1}: {fraction * 100:.1f}% of pixels changed "
-                    f"visibly, above the {max_differing_fraction * 100:.0f}% limit",
-                    worst_page=index,
-                    max_pixel_delta=delta,
-                    differing_fraction=fraction,
-                )
-
-        return VerifyResult(
-            passed=True,
-            reason="text identical; visual difference within limits",
-            worst_page=worst_page,
-            max_pixel_delta=worst_delta,
-            differing_fraction=worst_fraction,
-        )
-    finally:
-        original_doc.close()
-        candidate_doc.close()
+        finally:
+            original_doc.close()
+            candidate_doc.close()
 
 
 def _to_bytes(pdf: pikepdf.Pdf) -> bytes:
