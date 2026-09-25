@@ -40,12 +40,6 @@ pipx install "modpdf[gui]"    # command line and desktop app
 pipx install modpdf           # command line only
 ```
 
-Until the first release is on PyPI, install from GitHub instead:
-
-```
-pipx install "modpdf[gui] @ git+https://github.com/BryanIGD/ModPDF"
-```
-
 Then run `modpdf --help`, or `modpdf-gui` for the app. To build a standalone
 `ModPDF.app` for macOS, see [packaging/macos](packaging/macos/README.md).
 
@@ -257,9 +251,8 @@ uv run pytest
 ```
 
 On every pull request, CI runs ruff, mypy (strict) and the tests on macOS,
-Linux and Windows, plus pip-audit and bandit. Every PDF the tests use is generated at test time,
-and no real document is ever committed. The screenshots above are regenerated
-by `scripts/make_readme_screenshots.py` from a made-up sample document.
+Linux and Windows, plus pip-audit and bandit. Every PDF the tests use is
+generated at test time, and no real document is ever committed.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how the code is organised and
 tested. Found a security issue? Please follow [SECURITY.md](SECURITY.md)

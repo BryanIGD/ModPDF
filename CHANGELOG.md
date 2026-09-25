@@ -4,9 +4,7 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-Nothing tagged yet. The first release will be 0.1.0.
+## [0.1.0] - 2026-09-25
 
 ### Added
 
@@ -103,8 +101,6 @@ Nothing tagged yet. The first release will be 0.1.0.
 - ADRs for pikepdf over Ghostscript, the compression quality gate, blocking
   the network at runtime, and the PDFium lock. `docs/compression.md` holds the
   compression details that used to fill most of the README.
-- `scripts/make_readme_screenshots.py`, which regenerates the README's
-  screenshots from a generated sample document.
 
 ### Changed
 
