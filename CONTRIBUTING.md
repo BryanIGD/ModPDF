@@ -85,6 +85,24 @@ own, and neither can reach the filesystem without going through
 `modpdf/security/`. A change that adds behavior only one interface can use is
 a sign it belongs in the wrong layer.
 
+## Releasing
+
+1. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`,
+   add a new empty `## [Unreleased]` above it, and update the comparison links
+   at the bottom.
+2. Bump the version in `pyproject.toml` **and** in the `modpdf` entry of
+   `uv.lock` (`uv lock` does the second one for you). CI installs with
+   `--locked`, so changing one without the other fails every job.
+3. Merge to `main` and wait for CI to pass.
+4. `git tag vX.Y.Z && git push origin vX.Y.Z`. The release workflow checks the
+   tag matches the version, builds, and waits for approval on the `pypi`
+   environment. After publishing, it creates the GitHub Release from that
+   version's changelog section and attaches the macOS app.
+
+To try the pipeline without releasing anything, run the release workflow by
+hand (Actions → release → Run workflow). It publishes to TestPyPI instead and
+creates no GitHub Release.
+
 ## Commit messages and pull requests
 
 Say what changed and why, the way the rest of this codebase's comments do.

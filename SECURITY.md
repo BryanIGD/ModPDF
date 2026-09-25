@@ -36,8 +36,9 @@ line actually is.
 
 ## Supported versions
 
-There is no tagged release yet — see the README's Status section. Report
-against the current `main` branch.
+Only the latest release gets security fixes. Check which version you have
+with `modpdf --version`, and if you can, confirm the problem on the latest
+release or on `main` before reporting.
 
 ## Process
 

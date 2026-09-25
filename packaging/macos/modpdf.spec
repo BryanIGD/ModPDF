@@ -28,11 +28,16 @@ if not ICON.exists():
 import sys
 
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, SPECPATH)
+from licenses import third_party_license_datas  # noqa: E402 — needs the path insert above
 from modpdf import __version__  # noqa: E402 — needs the path insert above first
 
 a = Analysis(
     [str(ENTRY)],
     pathex=[str(ROOT / "src")],
+    # Every bundled package's license text, into Contents/Resources/
+    # THIRD_PARTY_LICENSES. See licenses.py: the build stops if one is missing.
+    datas=third_party_license_datas(),
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

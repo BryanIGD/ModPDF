@@ -4,6 +4,28 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.1.2] - 2026-09-25
+
+### Fixed
+
+- The macOS app now includes the license text of everything it bundles:
+  Python, PySide6 and Qt, and every package ModPDF depends on, in
+  `ModPDF.app/Contents/Resources/THIRD_PARTY_LICENSES`. The 0.1.0 and 0.1.1
+  app downloads were missing them, and `NOTICE` wrongly said PySide6 is never
+  bundled. The build now stops if any bundled package has no license file.
+- `SECURITY.md` said there was no release yet and pointed to a README section
+  that no longer exists.
+
+### Changed
+
+- PyPI lists BryanIGD as the author, and links to the source code, issue
+  tracker, changelog and security policy.
+- The README says where to download the Mac app, and that it's built for
+  Apple Silicon.
+- `CONTRIBUTING.md` explains how to make a release.
+
 ## [0.1.1] - 2026-09-25
 
 ### Fixed
@@ -167,3 +189,8 @@ uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
   between and the window was left saying "Adding…" forever, with no error.
   `workers.run` now holds a reference to every job until its result has
   actually been delivered.
+
+[Unreleased]: https://github.com/BryanIGD/ModPDF/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/BryanIGD/ModPDF/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/BryanIGD/ModPDF/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/BryanIGD/ModPDF/releases/tag/v0.1.0
