@@ -15,6 +15,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QCoreApplication
+from PySide6.QtWidgets import QLabel, QScrollArea
 
 from modpdf import tasks
 from modpdf.gui.session import load
@@ -61,7 +63,9 @@ class TestTheButtonIsNoLongerDisabled:
         assert window.tool_buttons["compress"].isEnabled()
 
     def test_selecting_it_shows_the_compress_panel(self, window: MainWindow) -> None:
-        assert window.panels.currentWidget() is window.compress_visual_radio.parentWidget()
+        shown = window.panels.currentWidget()
+        assert isinstance(shown, QScrollArea)  # every panel can scroll; see window._scrollable
+        assert shown.widget() is window.compress_visual_radio.parentWidget()
 
     def test_the_button_is_disabled_with_no_document_open(self) -> None:
         empty = MainWindow()
@@ -225,3 +229,26 @@ class TestScannedTextAlsoWorksThroughTheWindow:
             assert "quality check passed" in window.compress_result.text()
         finally:
             window.close()
+
+
+class TestThePanelFitsOnASmallScreen:
+    def test_a_panel_taller_than_the_window_scrolls_instead_of_squashing_its_text(
+        self, window: MainWindow, tmp_path: Path
+    ) -> None:
+        """A compression result makes this panel taller than a small window.
+        Without a scroll area, Qt squashed it to fit, and wrapped hints lost
+        their second line."""
+        run_compress(window, tmp_path / "out.pdf")
+        window.resize(1280, 560)
+        window.show()
+        QCoreApplication.processEvents()
+
+        page = window.panels.currentWidget()
+        assert isinstance(page, QScrollArea)
+        assert page.verticalScrollBar().maximum() > 0
+
+        content = page.widget()
+        assert content is not None
+        for label in content.findChildren(QLabel):
+            if label.wordWrap() and label.text() and label.isVisibleTo(window):
+                assert label.height() >= label.heightForWidth(label.width()), label.text()

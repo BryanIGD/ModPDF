@@ -11,9 +11,11 @@ renderer's version of this is in tests/gui/test_thumbnails.py.
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import pikepdf
 
+import modpdf
 from modpdf.pdfium_lock import PDFIUM_LOCK
 from modpdf.verify import verify
 from tests.conftest import PageMaker
@@ -51,3 +53,14 @@ def test_the_lock_is_reentrant() -> None:
     """Code already holding it can call something that takes it again."""
     with PDFIUM_LOCK, PDFIUM_LOCK:
         pass
+
+
+def test_every_module_that_uses_pdfium_takes_the_lock() -> None:
+    """A new pypdfium2 caller that forgets the lock would be the next crash.
+    This can't prove the lock is held around every call, but it catches the
+    easy mistake: a module that uses PDFium without using the lock at all."""
+    package = Path(modpdf.__file__).parent
+    for path in sorted(package.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if "import pypdfium2" in source:
+            assert "PDFIUM_LOCK" in source, f"{path.relative_to(package)} uses PDFium without it"

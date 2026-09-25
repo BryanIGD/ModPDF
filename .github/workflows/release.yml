@@ -1,0 +1,135 @@
+name: release
+
+# Pushing a tag like v0.1.0 publishes that version to PyPI, then creates a
+# GitHub Release with the same files, an SBOM, and an unsigned macOS app.
+#
+# Running it by hand (Actions → release → Run workflow) is a dry run: it
+# builds and publishes to TestPyPI instead, and creates no GitHub Release.
+#
+# Publishing uses PyPI's Trusted Publishing: PyPI trusts this workflow, in this
+# repository, running in the `pypi` environment, and nothing else. There is no
+# API token stored anywhere to be stolen.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v10.1.0
+
+      # A tag that doesn't match pyproject.toml would publish one version
+      # under another's name. Stop before anything is built.
+      - name: Tag matches the project version
+        if: github.event_name == 'push'
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match pyproject.toml version $version" >&2
+            exit 1
+          fi
+
+      - name: Build the sdist and wheel
+        run: uv build
+
+      # The SBOM lists every runtime dependency, desktop extra included, at the
+      # exact versions uv.lock pins.
+      - name: SBOM
+        run: |
+          uv export --locked --no-dev --extra gui --no-emit-project --no-hashes \
+            --output-file requirements-runtime.txt
+          uvx --from cyclonedx-bom==7.4.0 cyclonedx-py requirements \
+            --pyproject pyproject.toml --of JSON --output-reproducible \
+            -o sbom.cdx.json requirements-runtime.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/modpdf
+    permissions:
+      id-token: write  # what Trusted Publishing uses instead of a token
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@v1.14.2
+        with:
+          repository-url: ${{ github.event_name == 'workflow_dispatch' && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}
+          # A second dry run of the same version would otherwise fail on
+          # TestPyPI; a real release must never silently skip.
+          skip-existing: ${{ github.event_name == 'workflow_dispatch' }}
+
+  github-release:
+    needs: publish
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/download-artifact@v8
+        with:
+          name: sbom
+
+      # The release notes are this version's own section of CHANGELOG.md.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "CHANGELOG.md has no section for $version" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* sbom.cdx.json \
+            --title "ModPDF $version" --notes-file notes.md
+
+  # Separate from the release above, so a problem building the app can't stop
+  # the PyPI release or the GitHub Release from happening.
+  macos-app:
+    needs: github-release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v10.1.0
+      - name: Install
+        run: |
+          uv sync --locked --all-groups --python 3.13
+          uv pip install pyinstaller
+      - name: Build ModPDF.app
+        run: packaging/macos/build.sh
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ditto -c -k --keepParent dist/ModPDF.app "ModPDF-${GITHUB_REF_NAME}-macos-arm64.zip"
+          gh release upload "$GITHUB_REF_NAME" "ModPDF-${GITHUB_REF_NAME}-macos-arm64.zip"

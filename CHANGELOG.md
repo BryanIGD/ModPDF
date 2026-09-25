@@ -93,8 +93,22 @@ Nothing tagged yet. The first release will be 0.1.0.
   uses, so there is still no image asset in the repository. Signing and
   notarization are not done yet; see `packaging/macos/README.md`.
 
+- A release workflow. Pushing a version tag publishes to PyPI with Trusted
+  Publishing (no API token exists to leak), then creates a GitHub Release
+  with the package files, a CycloneDX SBOM of every runtime dependency, and
+  an unsigned macOS app. Running it by hand publishes to TestPyPI as a dry
+  run.
+- `bandit` now runs in pre-commit, on the same files the security workflow
+  scans.
+- ADRs for pikepdf over Ghostscript, the compression quality gate, blocking
+  the network at runtime, and the PDFium lock. `docs/compression.md` holds the
+  compression details that used to fill most of the README.
+- `scripts/make_readme_screenshots.py`, which regenerates the README's
+  screenshots from a generated sample document.
+
 ### Changed
 
+- The README was rewritten to be shorter, with screenshots at the top.
 - The desktop app's layout was redesigned: a new header and toolbar, a
   drop-zone empty state, a document details card, and a set of line icons
   drawn in code (`modpdf/gui/icons.py`) rather than loaded from files or an
@@ -109,6 +123,17 @@ Nothing tagged yet. The first release will be 0.1.0.
   number in a report always matches the number on disk.
 
 ### Fixed
+
+- `inspect` always reported "0 images". Its scan skipped every object that
+  wasn't a plain dictionary, and an image is always a stream. Soft masks are
+  not counted as images of their own, so a transparent picture counts once.
+- In dark mode, radio buttons were invisible until checked: the platform style
+  drew their rings in light-theme grey. They're now drawn by the app's own
+  stylesheet in both themes.
+- Hints under the Compress panel's options could lose their second line. The
+  indent was stylesheet padding, which QLabel's word wrap doesn't measure, and
+  a panel taller than the window was squashed to fit. Hints now use a real
+  margin, and every inspector panel scrolls when it doesn't fit.
 
 - The desktop app rendered every page thumbnail on its own window thread, so
   opening a large document froze the window until the last page was done.

@@ -214,6 +214,22 @@ def stylesheet() -> str:
 
     QRadioButton, QCheckBox {{ background: transparent; spacing: 8px; }}
 
+    /* Drawn here rather than left to the platform style, which paints the
+       ring in fixed light-theme greys: in dark mode an unchecked radio was
+       invisible. Every size below adds up to 16px, so a radio does not
+       shift when it is checked. */
+    QRadioButton::indicator {{
+        width: 12px; height: 12px; border-radius: 8px;
+        border: 2px solid {CONTROL_LINE}; background: {PANEL};
+    }}
+    QRadioButton::indicator:hover {{ border-color: {INK_3}; }}
+    QRadioButton::indicator:checked {{
+        width: 6px; height: 6px; border: 5px solid {BLUE}; background: {PANEL};
+    }}
+    QRadioButton::indicator:disabled {{ border-color: {LINE}; background: {RAIL}; }}
+    QRadioButton::indicator:checked:disabled {{ border-color: {INK_3}; }}
+    QRadioButton:disabled {{ color: {INK_3}; }}
+
     QToolTip {{
         background: {SLATE}; color: #FFFFFF; border: none;
         padding: 5px 8px; border-radius: 4px;

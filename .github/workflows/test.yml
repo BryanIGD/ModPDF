@@ -13,8 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Fast feedback on pull requests: every OS, but only the newest Python.
-  # The full interpreter matrix runs on main and on release tags.
+  # Every OS on the newest Python, plus the oldest supported versions on Linux
+  # only. The older versions differ in the language, not the platform, so one
+  # OS is enough to catch them, and it keeps pull request feedback quick.
   test:
     runs-on: ${{ matrix.os }}
     strategy:

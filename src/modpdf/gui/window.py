@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -317,11 +318,11 @@ class MainWindow(QMainWindow):
 
         self.panels = QStackedWidget()
         self.panel_index = {
-            "pages": self.panels.addWidget(self._build_pages_panel()),
-            "split": self.panels.addWidget(self._build_split_panel()),
-            "compress": self.panels.addWidget(self._build_compress_panel()),
-            "sanitize": self.panels.addWidget(self._build_sanitize_panel()),
-            "findings": self.panels.addWidget(self._build_findings_panel()),
+            "pages": self.panels.addWidget(_scrollable(self._build_pages_panel())),
+            "split": self.panels.addWidget(_scrollable(self._build_split_panel())),
+            "compress": self.panels.addWidget(_scrollable(self._build_compress_panel())),
+            "sanitize": self.panels.addWidget(_scrollable(self._build_sanitize_panel())),
+            "findings": self.panels.addWidget(_scrollable(self._build_findings_panel())),
         }
         layout.addWidget(self.panels, 1)
 
@@ -500,22 +501,14 @@ class MainWindow(QMainWindow):
         self.compress_visual_radio.setChecked(True)
         self.compress_mode.addButton(self.compress_visual_radio)
         layout.addWidget(self.compress_visual_radio)
-        visual_hint = QLabel(
-            "Oversized images are downsampled. Text and vector art are never touched."
+        layout.addWidget(
+            _radio_hint("Oversized images are downsampled. Text and vector art are never touched.")
         )
-        visual_hint.setWordWrap(True)
-        visual_hint.setStyleSheet(
-            f"color: {theme.INK_3}; font-size: 11px; padding-left: 22px; padding-bottom: 4px;"
-        )
-        layout.addWidget(visual_hint)
 
         self.compress_lossless_radio = QRadioButton("Lossless only")
         self.compress_mode.addButton(self.compress_lossless_radio)
         layout.addWidget(self.compress_lossless_radio)
-        lossless_hint = QLabel("Not one pixel changes. Usually saves 5-25%.")
-        lossless_hint.setWordWrap(True)
-        lossless_hint.setStyleSheet(f"color: {theme.INK_3}; font-size: 11px; padding-left: 22px;")
-        layout.addWidget(lossless_hint)
+        layout.addWidget(_radio_hint("Not one pixel changes. Usually saves 5-25%.", bottom=0))
 
         layout.addSpacing(8)
         layout.addWidget(SectionLabel("Compression level"))
@@ -531,12 +524,7 @@ class MainWindow(QMainWindow):
             radio = QRadioButton(label)
             self.compress_level.addButton(radio)
             level_layout.addWidget(radio)
-            hint_label = QLabel(hint)
-            hint_label.setWordWrap(True)
-            hint_label.setStyleSheet(
-                f"color: {theme.INK_3}; font-size: 11px; padding-left: 22px; padding-bottom: 4px;"
-            )
-            level_layout.addWidget(hint_label)
+            level_layout.addWidget(_radio_hint(hint))
             return radio
 
         self.compress_quality_radio = level_row(
@@ -1231,7 +1219,7 @@ class MainWindow(QMainWindow):
             lines.append(
                 f'<span style="font-size:11.5px; color:{theme.INK_2};">'
                 f"images: {images.recompressed} recompressed, {images.left_alone} left alone"
-                f"   {_human_size(images.bytes_before)} → {_human_size(images.bytes_after)}</span>"
+                f" · {_human_size(images.bytes_before)} → {_human_size(images.bytes_after)}</span>"
             )
 
         if report.pages_flattened:
@@ -1537,6 +1525,39 @@ def _human_size(count: int) -> str:
             return f"{size:.{precision}f} {unit}"
         size /= 1024
     return f"{size:.1f} GB"
+
+
+def _scrollable(page: QWidget) -> QScrollArea:
+    """One inspector panel, able to scroll when it is taller than the window.
+
+    Each panel gets its own scroll area rather than sharing one around the
+    whole stack: a QStackedWidget is as tall as its tallest page, so a shared
+    one would give even the short panels a scroll bar. Without any, Qt
+    squashes an overflowing panel instead — wrapped hints lose their second
+    line, which is what a compression result or a long list of split ranges
+    did on a smaller screen.
+    """
+    area = QScrollArea()
+    area.setWidget(page)
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    return area
+
+
+def _radio_hint(text: str, *, bottom: int = 4) -> QLabel:
+    """The small grey explanation under a radio button, indented to line up
+    with the button's own text.
+
+    The indent is a contents margin, not stylesheet padding: QLabel's word
+    wrap does not account for padding when it measures itself, so a padded
+    hint could be laid out wider than the panel and clipped at its edge.
+    """
+    label = QLabel(text)
+    label.setWordWrap(True)
+    label.setContentsMargins(22, 0, 0, bottom)
+    label.setStyleSheet(f"color: {theme.INK_3}; font-size: 11px;")
+    return label
 
 
 def _chrome_button(icon_name: str, label: str) -> QPushButton:

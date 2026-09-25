@@ -254,9 +254,21 @@ def scan_objects(pdf: pikepdf.Pdf) -> dict[str, Any]:
     uris: list[str] = []
     fonts: list[str] = []
     javascript = 0
-    images = 0
+    image_ids: set[tuple[int, int]] = set()
+    mask_ids: set[tuple[int, int]] = set()
 
     for obj in pdf.objects:
+        # An image is a stream, never a plain dictionary, so it has to be
+        # counted before the dictionary-only checks below skip it. A soft mask
+        # is an image stream too, but it is part of another image, not a
+        # picture of its own: counting it would count a transparent PNG twice.
+        if isinstance(obj, pikepdf.Stream):
+            if obj.get("/Subtype") == pikepdf.Name("/Image"):
+                image_ids.add(obj.objgen)
+                mask = obj.get("/SMask")
+                if isinstance(mask, pikepdf.Stream):
+                    mask_ids.add(mask.objgen)
+            continue
         if not isinstance(obj, pikepdf.Dictionary):
             continue
 
@@ -284,16 +296,13 @@ def scan_objects(pdf: pikepdf.Pdf) -> dict[str, Any]:
             if base is not None:
                 fonts.append(str(base).lstrip("/"))
 
-        if obj.get("/Subtype") == pikepdf.Name("/Image"):
-            images += 1
-
     return {
         "actions": actions,
         "embedded_files": embedded_files,
         "uris": uris,
         "fonts": fonts,
         "javascript": javascript,
-        "images": images,
+        "images": len(image_ids - mask_ids),
     }
 
 

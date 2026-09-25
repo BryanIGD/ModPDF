@@ -19,6 +19,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy
 uv run pytest -v --cov
+uv run bandit -r src/ -c pyproject.toml
 ```
 
 ## YAGNI is enforced, not aspirational

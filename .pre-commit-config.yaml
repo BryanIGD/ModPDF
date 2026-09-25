@@ -13,8 +13,17 @@ repos:
         args: ["--maxkb=512"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.4
+    rev: v0.16.7  # keep in step with ruff's version in uv.lock, or the two disagree
     hooks:
-      - id: ruff
+      - id: ruff-check
         args: [--fix]
       - id: ruff-format
+
+  # The same scan the security workflow runs on src/. Here so a finding shows up
+  # before a push instead of after it, as a bare `assert` once did.
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.9.4  # keep in step with bandit's version in uv.lock
+    hooks:
+      - id: bandit
+        args: ["-c", "pyproject.toml", "-q"]
+        files: ^src/

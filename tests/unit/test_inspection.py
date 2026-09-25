@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pikepdf
 import pytest
 
 from modpdf.inspection import count_revisions, inspect_document
-from tests.conftest import build_hostile_pdf, build_pdf
+from tests.conftest import build_hostile_pdf, build_pdf, build_photo_pdf
 
 
 @pytest.fixture
@@ -36,6 +37,30 @@ class TestBasicFacts:
 
     def test_lists_fonts(self, plain: Path) -> None:
         assert "Helvetica" in inspect_document(plain).fonts
+
+    def test_counts_images(self, tmp_path: Path) -> None:
+        """Images are streams, and the scan used to look only at plain
+        dictionaries, so every document was reported as having none."""
+        assert inspect_document(build_photo_pdf(tmp_path / "photo.pdf")).image_count == 1
+
+    def test_a_soft_mask_is_not_counted_as_a_second_image(self, tmp_path: Path) -> None:
+        path = tmp_path / "masked.pdf"
+        with pikepdf.new() as pdf:
+            pdf.add_blank_page()
+            mask = pikepdf.Stream(pdf, b"\xff" * 4)
+            mask.Type, mask.Subtype = pikepdf.Name.XObject, pikepdf.Name.Image
+            mask.Width, mask.Height, mask.BitsPerComponent = 2, 2, 8
+            mask.ColorSpace = pikepdf.Name.DeviceGray
+            image = pikepdf.Stream(pdf, b"\x80" * 12)
+            image.Type, image.Subtype = pikepdf.Name.XObject, pikepdf.Name.Image
+            image.Width, image.Height, image.BitsPerComponent = 2, 2, 8
+            image.ColorSpace, image.SMask = pikepdf.Name.DeviceRGB, mask
+            pdf.pages[0].obj.Resources = pikepdf.Dictionary(XObject=pikepdf.Dictionary(Im0=image))
+            pdf.save(path)
+        assert inspect_document(path).image_count == 1
+
+    def test_a_document_without_images_reports_none(self, plain: Path) -> None:
+        assert inspect_document(plain).image_count == 0
 
     def test_unencrypted_document_reports_no_permissions(self, plain: Path) -> None:
         found = inspect_document(plain)

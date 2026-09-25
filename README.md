@@ -1,43 +1,81 @@
 # ModPDF
 
-Split, merge, reorder and compress PDFs on your own machine. Your documents are
-never uploaded anywhere, and the program goes further than promising that: at
-startup it removes its own ability to open a network socket, so a network call
-cannot happen by accident, through a dependency, or through a future version of
-this program written by someone who forgot.
+[![tests](https://github.com/BryanIGD/ModPDF/actions/workflows/test.yml/badge.svg)](https://github.com/BryanIGD/ModPDF/actions/workflows/test.yml)
 
-That is a claim you can check rather than trust. `tests/security/` asserts that
-sockets, DNS lookups and HTTP requests all raise, that real PDF work still
-succeeds while they are raising, and that the command-line entry point turns the
-guard on. CI runs the whole suite a second time inside a network namespace with
-no interfaces at all.
+Split, merge, reorder and compress PDFs on your own computer. ModPDF is a
+desktop app and a command-line tool. It never uploads your files, and it goes
+further than promising that: when it starts, it turns off its own ability to
+connect to the network. The test suite checks that.
 
-## Why this exists
+![ModPDF with a document open and two pages selected](docs/images/app-light.png)
 
-Search for "split PDF" and every result in the first page is a website. You
-upload your document to a server you know nothing about, it does the work, and
-you download the result. For a restaurant menu that is fine. For a signed
-contract, a medical record, a bank statement or anything covered by an NDA, you
-have just disclosed the document to a third party, and most people doing it do
-not realise that is what happened.
+## Why I built this
 
-The desktop alternatives are not much better. Plenty of them bundle an updater
-that phones home, or a crash reporter that uploads the document it crashed on.
+Search for "split PDF" and almost every result is a website. You upload your
+file, their server does the work, and you download the result. That's fine for
+a restaurant menu. It's not fine for a signed contract, a bank statement or a
+medical record, and most people never think about where that file just went.
 
-ModPDF is the boring, local version. Your files stay where they are.
+I wanted a tool I could trust with those documents. Everything in ModPDF runs
+locally, and I wanted that to be something you can verify instead of something
+you have to take my word for.
 
-## Status
+## What it does
 
-Early development. Five of seven phases are done: the three page operations,
-the security layer they rest on, compression with the verification harness
-that makes it trustworthy, and the desktop app. Distribution has started — a
-macOS app can be built locally (see `packaging/macos`) — but nothing is
-signed, notarized or on PyPI yet.
+- **Page editing:** split, merge, reorder, delete, duplicate and extract pages.
+- **Compression:** it checks every page against the original before keeping
+  the result.
+- **Inspect:** shows what's in a PDF that you can't see on the page, like
+  scripts, attachments and earlier revisions of the text.
+- **Sanitize:** removes all of that and writes a clean copy.
+- **Both interfaces share one codebase.** The desktop app and the command line
+  call the same functions, so a fix reaches both.
 
-There is no release to install. Everything below is real output from the
-commands as they currently run.
+## Install
 
-## What works
+Needs Python 3.11 or newer.
+
+```
+pipx install "modpdf[gui]"    # command line and desktop app
+pipx install modpdf           # command line only
+```
+
+Until the first release is on PyPI, install from GitHub instead:
+
+```
+pipx install "modpdf[gui] @ git+https://github.com/BryanIGD/ModPDF"
+```
+
+Then run `modpdf --help`, or `modpdf-gui` for the app. To build a standalone
+`ModPDF.app` for macOS, see [packaging/macos](packaging/macos/README.md).
+
+## The desktop app
+
+![The same document in dark mode, after compressing it](docs/images/app-dark-compress.png)
+
+Open a PDF and its pages show up as thumbnails. You can select them, drag them
+into a new order, delete, duplicate, extract, split, compress or sanitize.
+Nothing is written until you save. The app keeps your edits as a new order of
+the original pages instead of a modified copy, so Revert is instant.
+
+Opening a second file adds its pages after the first one's, so you can build
+one document out of several. Dropping several files onto the window at once
+merges them straight into a new file.
+
+The header shows a chip when a file contains something worth knowing about,
+like the "1 thing to know" above. In that file it's the metadata, which names
+the author and the software that made it. For a file with JavaScript in it,
+the chip turns red.
+
+Settings has three options, and each applies as soon as you change it:
+thumbnail size, the compression level the Compress panel starts on, and light
+or dark. Those three settings are the only thing the app remembers between
+runs. There is no recent-files list, and thumbnails are never saved to disk,
+because both would leave a record of which confidential files you opened.
+
+## The command line
+
+Every example here is real output.
 
 ```
 $ modpdf split report.pdf --pages 1-10,11-20,21- -o chapters/
@@ -47,38 +85,24 @@ $ modpdf split report.pdf --pages 1-10,11-20,21- -o chapters/
   report-p021-023.pdf  3 pages
 ```
 
-Each comma-separated group becomes its own file, and `--dry-run` shows the
-plan before anything is written:
-
-```
-$ modpdf split report.pdf --pages 1-5,20- -o parts/ --dry-run
-dry run — nothing written
-23 pages → 2 files in parts
-  report-p001-005.pdf  pages 1-5
-  report-p020-023.pdf  pages 20-23
-```
-
 ```
 $ modpdf merge report.pdf appendix.pdf -o complete.pdf
 2 files (23 + 4 pages) → complete.pdf 27 pages
 ```
 
-`reorder` selects, rearranges and duplicates pages. The output contains exactly
-the pages you list, in that order, so leaving a page out drops it — and it says
-so rather than letting you find out later:
+`reorder` keeps exactly the pages you list, in that order. If you leave a page
+out, it tells you:
 
 ```
 $ modpdf reorder report.pdf --order -1,1-3 -o summary.pdf
 23 pages → summary.pdf 4 pages (19 pages dropped)
 ```
 
-Page numbers work the way a print dialog works: they start at 1, ranges include
-both ends, `12-` means "page 12 to the end", and `-1` is the last page.
+Page numbers work like a print dialog: they start at 1, ranges include both
+ends, `12-` means page 12 to the end, and `-1` is the last page. `--dry-run`
+shows what would be written without writing anything.
 
-### Finding out what is in a document
-
-`inspect` answers the question worth asking before you forward a file: what is
-in here besides the pages I can see? It reads and changes nothing.
+`inspect` shows what's in a file besides its pages. It doesn't change anything.
 
 ```
 $ modpdf inspect statement.pdf
@@ -101,12 +125,11 @@ statement.pdf
   ...
 ```
 
-It also reports **earlier revisions**, which is the one that catches out law
-firms and governments: many editors save by appending changes rather than
-rewriting the file, so previous drafts stay inside it and text that looks
-deleted is still recoverable. `--json` gives the same information for scripts.
+It also finds earlier revisions. A lot of editors save by adding changes to
+the end of the file, so text you deleted can still be recovered from it.
+`--json` gives the same report in a form scripts can read.
 
-### Removing it
+`sanitize` removes all of it:
 
 ```
 $ modpdf sanitize statement.pdf -o safe.pdf
@@ -117,21 +140,11 @@ safe.pdf 3 pages
   anything visible on a page is still there.
 ```
 
-`sanitize` rebuilds the document from its pages rather than deleting references,
-because unlinking a piece of JavaScript leaves it in the file and fully
-recoverable. The payload bytes are absent from the output, and there is a test
-that greps for them to prove it.
+It rebuilds the document from its pages instead of deleting references,
+because an unlinked script is still sitting in the file. There's a test that
+searches the output's bytes to prove the payload is gone.
 
-Plain web links are kept by default, since a citation in a report is content and
-the reader has to click it. Actions that fire on their own or execute code are
-not. `--strip-links` removes links too.
-
-### Compressing it
-
-A PDF that is text and vector graphics is already a set of compressed drawing
-commands — there is no clever trick left to apply. Every dramatic size
-reduction you've seen advertised came from one thing: recompressing scanned
-images. `compress` is honest about that rather than pretending otherwise:
+`compress` checks its own work:
 
 ```
 $ modpdf compress deposition.pdf -o smaller.pdf
@@ -140,242 +153,119 @@ smaller.pdf  55.1 KB → 6.0 KB  (89% smaller)
   quality    text identical · largest visible difference 2.0% of one page   PASS
 ```
 
-Every page is rendered and compared against the original before the result is
-accepted. If any page looks different enough to matter, the whole document
-falls back to a lossless result instead and says so — the worst case is a file
-smaller than you hoped for, never one that looks worse.
+Before keeping the result, it renders every page of both files and compares
+them. If any page looks different enough to matter, it throws the result away,
+uses a lossless version instead, and tells you. The worst case is a file that
+didn't shrink as much as you hoped, never one that looks worse.
 
-`--level` picks how hard to push that trade-off, rather than leaving you to
-guess at a DPI number: `low` barely touches anything, and `balanced` (the
-default) is a sensible middle ground.
+A PDF that's mostly text won't get much smaller, and `compress` says so rather
+than making up savings. The big reductions come from scanned images.
+`--level low|balanced|high` sets how hard it tries, and `--lossless` never
+changes a single pixel. [How compression works](docs/compression.md) has the
+details, including which images it deliberately leaves alone and why.
 
-`high` ("Maximum compression" in the desktop app) is tuned for a different
-job than the other two, and it is worth being direct about what it actually
-buys you. Its own image resolution and JPEG quality are deliberately kept
-close to lossless — raised on purpose after an early, more aggressive version
-made a flattened diagram's own small text hard to read — so on a document
-like the scan above, whose only large content is one image, `high` has
-little left to trade and lands close to `balanced`:
+## How the privacy claim is enforced
 
-```
-$ modpdf compress deposition.pdf -o smaller.pdf --level high
-smaller.pdf  55.1 KB → 6.0 KB  (89% smaller)
-  images     1 recompressed, 0 left alone   45.3 KB → 4.8 KB
-  quality    text identical · largest visible difference 1.9% of one page   PASS
-  note       maximum compression: image quality was reduced on purpose to shrink the file further
-```
+- **No network.** At startup, before reading any file, ModPDF replaces
+  Python's socket, DNS and TLS entry points with ones that refuse.
+  `tests/security/` checks that network calls fail and that PDF work still
+  succeeds while they're blocked. CI then runs the whole suite a second time
+  inside a network namespace with no network interfaces at all.
+- **No passwords in the command line.** There's no `--password VALUE` flag,
+  because other programs can read a command's arguments and they end up in
+  your shell history. Use `--password-stdin` or `MODPDF_PASSWORD`.
+- **No half-written files.** Output is written next to its destination and
+  moved into place in one step, readable only by you (mode `0600`).
+- **Sync folders are flagged.** If you save into iCloud Drive, Dropbox, Google
+  Drive or OneDrive, it warns you, because that file is about to be uploaded.
+- **Bad input fails safely.** Malformed, truncated, empty and oversized files
+  get a clear error and no partial output. A damaged file that QPDF can repair
+  still opens, with a warning that content may be missing.
 
-Where `high` earns its name is a document whose bulk is not an image at all.
-Not every large PDF is large because of its images: a complex vector diagram
-— thousands of curves and fills a design tool exported directly as drawing
-commands, not as a picture — can outweigh every image in the file combined,
-and no image setting touches it, because it is not an image. Both `balanced`
-and `high` rasterize a page whose own vector content is heavy enough to be
-worth it, each at its own resolution and JPEG quality, while leaving every
-character of text on that page exactly as it was — including text that is
-itself part of the diagram, like a box's own label. `low` never does this; it
-promises to barely touch anything, and a rasterized page is a bigger change
-than that:
+[THREAT_MODEL.md](THREAT_MODEL.md) lists what this protects against and, just
+as important, what it doesn't.
+
+## How it's built
 
 ```
-$ modpdf compress paper.pdf -o smaller.pdf --level balanced
-paper.pdf  2.3 MB → 1.7 MB  (26% smaller)
-  images     3 already at or below the target, left alone
-  vector     1 page of complex vector art flattened to an image
-  quality    text identical · largest visible difference 0.1% of one page   PASS
-
-$ modpdf compress paper.pdf -o smaller.pdf --level high
-paper.pdf  2.3 MB → 1.3 MB  (45% smaller)
-  images     3 already at or below the target, left alone
-  vector     1 page of complex vector art flattened to an image
-  quality    text identical · largest visible difference 0.5% of one page   PASS
-  note       maximum compression: image quality was reduced on purpose to
-             shrink the file further; text stays selectable even on a
-             flattened page — only its vector art was
+src/modpdf/
+  cli.py        command line (Typer)
+  gui/          desktop app (PySide6)
+  tasks.py      every operation, called by both interfaces
+  ops/          split, merge, reorder, compress, sanitize
+  verify.py     the compression quality check
+  security/     network guard, safe file writing, input limits, passwords
 ```
 
-So `high` is not a blanket "always the smallest file" promise — it is a
-promise about what happens when there is vector content worth flattening.
-On a document without any, `balanced` can legitimately win, as the scan
-example above shows.
+The PDF parsing itself is done by QPDF (through pikepdf) and PDFium (through
+pypdfium2). I didn't write a PDF parser, and I don't think I should have. The
+reasons for the main decisions are written up in [docs/adr](docs/adr):
 
-`balanced`'s flattened result is still held to the same strict, unwidened
-quality gate as the rest of what it does — the same gate that would fall the
-whole document back to lossless if a flattened page ever looked wrong — so
-turning this on for `balanced` did not loosen its "no visible loss" promise;
-only `high` does that.
+- [Python, not Go or Rust](docs/adr/0001-python-over-go-and-rust.md)
+- [pypdfium2, not PyMuPDF](docs/adr/0002-pypdfium2-over-pymupdf.md)
+- [pikepdf, not Ghostscript](docs/adr/0003-pikepdf-over-ghostscript.md)
+- [Checking every compressed page](docs/adr/0004-compression-quality-gate.md)
+- [Blocking the network at runtime](docs/adr/0005-no-network-at-runtime.md)
+- [One lock for PDFium](docs/adr/0006-one-lock-for-pdfium.md)
 
-`--lossless` skips images entirely and only does the safe structural cleanup —
-not one pixel or glyph changes, and `--level` has nothing to do in this mode:
+## Problems I ran into
 
-```
-$ modpdf compress deposition.pdf -o smaller.pdf --lossless
-smaller.pdf  55.1 KB → 46.5 KB  (16% smaller)
-```
+A few bugs that taught me something:
 
-A text-only document will not shrink much either way — there is no image data
-to recompress — and `compress` says so rather than inventing savings:
-
-```
-$ modpdf compress report.pdf -o smaller.pdf
-smaller.pdf was already optimal
-```
-
-Which codec an oversized image gets depends on what is actually in it, not on
-how it happens to be stored: content that is overwhelmingly near-black or
-near-white — scanned text, even when the file stores it as ordinary 8-bit
-grayscale rather than true 1-bit, which is the common case — gets CCITT Group
-4, lossless for that kind of content and usually the largest single win in the
-file. Genuine photographs and textured scans get JPEG at a conservative
-quality. Left deliberately untouched: **CMYK images** (a naive re-encode was
-tested against this project's own quality gate and came back with a pure cyan
-swatch rendering as white — the well-known Adobe CMYK-JPEG inversion problem,
-so this is a tested decision, not an oversight), **indexed/palette images**,
-and any image carrying a transparency mask, since resizing the mask correctly
-in lockstep with its parent is a feature this project intends to support but
-does not yet.
-
-### Things that are easy to get wrong, and are handled
-
-- **Bookmarks survive.** Splitting a report rebuilds each piece's outline
-  against its new page numbers. Entries whose parent heading ended up in a
-  different piece are promoted rather than deleted with it, so you do not lose a
-  chapter's worth of navigation over one missing heading.
-- **Metadata survives** ordinary operations, because reordering two pages should
-  not silently erase a document's title. Removing it is what `sanitize` is for.
-- **Damage is reported.** QPDF quietly repairs a malformed PDF and usually does
-  it well, but a recovered file can be missing content. ModPDF tells you:
-  `warning: statement.pdf is damaged. It was repaired well enough to read, but
-  content may be missing or altered (9 issues).`
-- **Cloud folders are called out.** "Your documents never leave your computer"
-  is false if the output lands in Dropbox. ModPDF resolves the destination and
-  says so — it still writes the file, it just declines to let you believe
-  something untrue.
-- **Passwords never touch the command line.** There is no `--password VALUE`
-  flag, because arguments are visible to every process on the machine through
-  `ps` and land in your shell history. Use `--password-stdin` or
-  `MODPDF_PASSWORD`.
-- **Nothing is half-written.** Output is staged beside its destination and moved
-  into place atomically, at mode `0600`, with split directories at `0700`.
-  Interrupt it and you have either the old file or no file.
-- **Hostile input fails safely.** Malformed, truncated, empty and
-  wrong-type files are refused with a clear message and no partial output.
-
-## The desktop app
-
-There is a window as well as a terminal. It is an optional extra, so a command
-line user never installs a GUI toolkit:
-
-```
-pip install modpdf[gui]
-modpdf-gui                  # or: modpdf-gui statement.pdf
-```
-
-To build a standalone `ModPDF.app` instead, see
-[packaging/macos/README.md](packaging/macos/README.md). It is unsigned for
-now, so it runs on the machine that built it but not yet on anyone else's.
-
-Open a document and you get its pages as thumbnails: select them, drag to
-reorder, delete, duplicate, extract, split by range, compress. Nothing is
-written until you save, because the window holds your edits as an ordering of
-the original's pages rather than as a modified document — which is also why
-Revert costs nothing.
-
-**Settings**, behind the gear in the header, holds three preferences. Each
-one takes effect as soon as you change it: thumbnail size in the page grid,
-the compression level the Compress panel starts on, and light or dark. The
-compression level also follows whatever you last picked in the Compress panel
-itself, so someone who always wants "Maximum" isn't choosing it again every
-time.
-
-**Open** builds a workspace out of more than one file, without a second
-button for it: open `pdf1`, then choose `pdf2` through the same Open button
-(or drop it onto the window), and the workspace holds `pdf1`'s pages followed
-by `pdf2`'s — including any reordering or deletion already pending on `pdf1`,
-because a second file arriving should not quietly undo the first one's
-edits. Do it again and a third file joins the same way. Dropping several
-files onto the window at once is a different, existing action — merge them
-straight to a new file rather than into the workspace, which is what you
-usually mean by dropping a whole batch in together. Combining files into a
-workspace needs a real file on disk — pdfium and every whole-document
-operation both require one — so each addition writes the combined result to
-a private, `0700` scratch directory the window
-creates for itself and deletes when it closes; it is never the user's chosen
-output location, and nothing in it survives the session.
-
-The two interfaces are not two implementations. Both call the same functions in
-`modpdf/tasks.py`, so a fix reaches both, and the window cannot reach the
-filesystem without going through the same security layer the terminal uses. It
-blocks its own network access at startup exactly as the CLI does, and the test
-suite asserts that a full open-edit-save cycle still works while the network is
-blocked.
-
-Two decisions carried over from the CLI's behaviour:
-
-- **Thumbnails are never written to disk.** A thumbnail cache is a folder of
-  readable pictures of confidential documents, sitting outside whatever
-  protection the original had, and it would outlive the session that made it.
-  Re-rendering on next launch is the cheaper trade.
-- **There is no recent-files list**, for the same reason: a list of paths to
-  confidential documents is itself a leak.
-
-The three preferences above are all the app keeps between runs, and none of
-them is about a document. [THREAT_MODEL.md](THREAT_MODEL.md) says exactly
-where they are stored.
-
-## Not built yet
-
-Subprocess isolation and a wall-clock timeout, on purpose: a timeout that
-cannot interrupt work already running inside a native library would silently
-fail to fire, and shipping one would be worse than having none — so there is
-none until the work runs in its own process.
-
-Inside `compress` specifically: JBIG2 (a further improvement over CCITT G4 for
-bilevel scans, needing an external encoder for a marginal gain), font
-subsetting, and correct handling of transparency masks — see "Compressing it"
-above for the images that are deliberately left untouched until that lands.
+- **Qt's drag-and-drop deleted pages.** Qt's built-in move is a remove
+  followed by an insert. Dropping page 3 between pages 5 and 6 destroyed page
+  6 and left two copies of page 3. I replaced it with plain mouse tracking,
+  which also made reordering testable (`gui/grid.py`).
+- **A background job that disappeared.** Adding a second file starts a job
+  from inside another job's completion callback. Nothing kept the first job's
+  Python object alive, so it was sometimes garbage collected before its result
+  arrived, and the window said "Adding…" forever with no error.
+- **Thumbnails froze the window.** The renderer was moved to a worker thread
+  but called directly from the window. A direct call runs on the caller's
+  thread, so every page rendered on the UI thread anyway.
+- **Fixing that crashed the tests.** PDFium isn't thread-safe, even across
+  different documents. Once thumbnails really rendered in the background, two
+  threads could be inside it at once. Every PDFium call now goes through one
+  lock.
+- **CMYK images turned white.** When I tried re-encoding CMYK images, the
+  quality check caught a pure cyan swatch rendering as white. It's a known
+  problem with Adobe's CMYK JPEGs, so CMYK images are now left alone.
 
 ## What it will not do
 
-Worth stating early, because these are deliberate and not on a roadmap.
+- **Redaction.** Drawing a black box over text leaves the text in the file,
+  and that has leaked real documents more than once. I'd rather not ship it
+  than ship it wrong.
+- **Big savings on text-only PDFs.** They're already compressed. Expect 5–25%.
+- **Protect you from a compromised computer.** If something already controls
+  your machine, nothing here helps.
 
-**Redaction.** Drawing a black rectangle over text leaves the text in the file,
-fully extractable, and this has leaked real documents from real institutions
-more than once. We would rather ship nothing than ship the version of redaction
-that is easy to build.
+## Not built yet
 
-**Meaningful compression of text-only PDFs.** A PDF that is text and vector
-graphics is already a set of compressed streams. There is no clever trick
-waiting to be applied. Savings there come to roughly 5–25% and come from
-structural cleanup, not magic. The dramatic numbers you see advertised
-elsewhere — 90% and up — come from one thing only: recompressing scanned
-images. When your document has scans in it, ModPDF will get those numbers too,
-and it will tell you that is where they came from.
-
-**Protecting you from your own computer.** If the machine is already
-compromised, nothing here helps. See THREAT_MODEL.md, which is specific about
-where the guarantees stop.
+Running each job in its own process with a timeout. A timeout that can't
+interrupt work already running inside a native library wouldn't actually fire,
+so there isn't one until the work runs in a separate process. Also JBIG2, font
+subsetting, and resizing images that have a transparency mask.
 
 ## Development
 
-Requires Python 3.11 or newer and [uv](https://docs.astral.sh/uv/).
-
 ```
-git clone <this repo>
+git clone https://github.com/BryanIGD/ModPDF.git
 cd ModPDF
 uv sync --all-groups
 uv run pytest
 ```
 
-Lint, types and tests all run in CI on macOS, Linux and Windows. `uv run ruff
-check`, `uv run ruff format`, `uv run mypy`.
+On every pull request, CI runs ruff, mypy (strict) and the tests on macOS,
+Linux and Windows, plus pip-audit and bandit. Every PDF the tests use is generated at test time,
+and no real document is ever committed. The screenshots above are regenerated
+by `scripts/make_readme_screenshots.py` from a made-up sample document.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions this codebase actually
-enforces, and [THREAT_MODEL.md](THREAT_MODEL.md) for what the security claims
-above do and do not cover. Found a security issue? See
-[SECURITY.md](SECURITY.md) rather than opening a public issue.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how the code is organised and
+tested. Found a security issue? Please follow [SECURITY.md](SECURITY.md)
+instead of opening a public issue.
 
-## Licence
+## License
 
-Apache 2.0. See LICENSE, and NOTICE for the third-party components ModPDF
-depends on.
+Apache 2.0. See [LICENSE](LICENSE), and [NOTICE](NOTICE) for the libraries
+ModPDF depends on.
