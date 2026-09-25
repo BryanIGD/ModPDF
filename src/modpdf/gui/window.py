@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -44,6 +45,7 @@ from modpdf.gui.session import Session, positions_to_groups
 from modpdf.gui.thumbnails import ThumbnailRenderer, placeholder
 from modpdf.gui.widgets import (
     Chip,
+    ElidedLabel,
     RangeRow,
     SectionLabel,
     SegmentedControl,
@@ -174,7 +176,7 @@ class MainWindow(QMainWindow):
         divider.setStyleSheet(f"color: {theme.LINE};")
         row.addWidget(divider)
 
-        self.title_label = QLabel()
+        self.title_label = ElidedLabel()
         self.title_label.setStyleSheet("font-size: 13.5px; font-weight: 600;")
         row.addWidget(self.title_label)
 
@@ -392,9 +394,8 @@ class MainWindow(QMainWindow):
         card_layout.setContentsMargins(14, 12, 14, 12)
         card_layout.setSpacing(8)
 
-        self.doc_status_label = QLabel("No document open")
+        self.doc_status_label = ElidedLabel("No document open")
         self.doc_status_label.setStyleSheet("font-size: 13px; font-weight: 600;")
-        self.doc_status_label.setWordWrap(True)
         card_layout.addWidget(self.doc_status_label)
 
         fact_grid = QGridLayout()
@@ -414,7 +415,8 @@ class MainWindow(QMainWindow):
             caption_label = QLabel(caption)
             caption_label.setStyleSheet(f"color: {theme.INK_3}; font-size: 12px;")
             fact_grid.addWidget(caption_label, row, 0)
-            value_label = QLabel("—")
+            # The file name can be any length; the other values are short.
+            value_label = ElidedLabel("—") if key == "name" else QLabel("—")
             value_label.setStyleSheet(f"color: {theme.INK}; font-size: 12px;")
             value_label.setAlignment(Qt.AlignmentFlag.AlignRight)
             fact_grid.addWidget(value_label, row, 1)
@@ -1419,8 +1421,8 @@ class MainWindow(QMainWindow):
             return
 
         self.title_label.setText(session.path.name)
-        size_mb = session.inspection.size_bytes / 1_048_576
-        self.subtitle_label.setText(f"{session.source_pages} pages · {size_mb:.1f} MB")
+        size = _human_size(session.inspection.size_bytes)
+        self.subtitle_label.setText(f"{session.source_pages} pages · {size}")
         self.hint_label.setText("drag to reorder")
 
         concerns = session.inspection.concerns
@@ -1537,6 +1539,14 @@ def _scrollable(page: QWidget) -> QScrollArea:
     line, which is what a compression result or a long list of split ranges
     did on a smaller screen.
     """
+    # The page always takes the panel's width, never its own minimum. A label
+    # that can't get any narrower (a long file name has no spaces to wrap at)
+    # would otherwise widen the whole page past the panel's edge, and with no
+    # sideways scrolling everything on the right would be cut off.
+    policy = page.sizePolicy()
+    policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+    page.setSizePolicy(policy)
+
     area = QScrollArea()
     area.setWidget(page)
     area.setWidgetResizable(True)

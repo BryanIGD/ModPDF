@@ -4,6 +4,20 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-09-25
+
+### Fixed
+
+- In the desktop app, a long file name could push the whole right-hand panel
+  wider than the window, cutting off every value and button on its right side.
+  File names have no spaces to wrap at, and each panel's scroll area was sizing
+  its content to the widest label instead of to the panel. Panels now always
+  take the panel's width, and long file names are shortened in the middle
+  (`Ley-Orgánica-…icaciones.pdf`) with the full name on hover. This came in
+  with 0.1.0's scrollable panels.
+- The header showed a small file's size as "0.0 MB". It now uses KB or MB, the
+  same as the Document card.
+
 ## [0.1.0] - 2026-09-25
 
 ### Added
