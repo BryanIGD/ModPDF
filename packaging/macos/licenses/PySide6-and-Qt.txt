@@ -1,0 +1,23 @@
+PySide6, Shiboken6 and Qt
+=========================
+
+This app includes PySide6, Shiboken6 and the Qt libraries they wrap, used
+under the GNU Lesser General Public License, version 3 (LGPL-3.0). The full
+text of that license, and of the GNU General Public License version 3 it
+builds on, is in this folder as LGPL-3.0.txt and GPL-3.0.txt.
+
+They are included unmodified, as separate dynamic libraries, in
+ModPDF.app/Contents/Frameworks. You can replace them with other compatible
+builds of the same libraries.
+
+ModPDF itself is licensed under Apache 2.0; its LICENSE and NOTICE are in
+the modpdf folder next to this one. It uses these libraries through their
+public interfaces, and does not modify them or statically link them.
+
+Source code for these libraries:
+
+  PySide6 and Shiboken6  https://code.qt.io/cgit/pyside/pyside-setup.git
+  Qt                     https://download.qt.io/official_releases/qt/
+
+Qt contains third-party components under their own licenses, listed at
+https://doc.qt.io/qt-6/licenses-used-in-qt.html

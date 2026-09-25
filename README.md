@@ -40,8 +40,14 @@ pipx install "modpdf[gui]"    # command line and desktop app
 pipx install modpdf           # command line only
 ```
 
-Then run `modpdf --help`, or `modpdf-gui` for the app. To build a standalone
-`ModPDF.app` for macOS, see [packaging/macos](packaging/macos/README.md).
+Then run `modpdf --help`, or `modpdf-gui` for the app.
+
+**The Mac app:** download `ModPDF-…-macos-arm64.zip` from the
+[latest release](https://github.com/BryanIGD/ModPDF/releases/latest). It's
+built for Apple Silicon Macs. On an Intel Mac, use pipx above, or build the
+app yourself with [packaging/macos](packaging/macos/README.md). The app isn't
+signed yet, so macOS blocks it the first time you open it. To allow it, go to
+System Settings → Privacy & Security and click Open Anyway.
 
 ## The desktop app
 

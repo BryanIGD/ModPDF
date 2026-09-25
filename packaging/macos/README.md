@@ -15,7 +15,7 @@ The result runs, and is genuinely offline the same way `modpdf-gui` from a
 normal install is — freezing the app doesn't change when `netguard.install()`
 runs, which is still the first thing `app.py` does. Good for testing a build
 on your own machine, or handing it directly to someone who trusts you enough
-to right-click → Open past Gatekeeper's warning.
+to allow it in System Settings → Privacy & Security → Open Anyway.
 
 It is **unsigned and unnotarized**. Apple's Gatekeeper will refuse to open it
 normally on any Mac other than the one that built it ("ModPDF.app is damaged
@@ -27,10 +27,20 @@ distribution — a `.dmg` someone downloads and just opens — needs:
 3. Submitting it to Apple for notarization (`notarytool`) and stapling the
    result (`stapler`).
 
-None of that is automated here, because it needs credentials that belong to
-whoever is actually releasing the app, not something to bake into a build
-script. When ModPDF has a release process, that's ADR-worthy on its own —
-see the project's `docs/adr/` for the pattern.
+None of that is automated, because it needs credentials that belong to
+whoever releases the app. The release workflow (`.github/workflows/release.yml`)
+builds this same unsigned app on an Apple Silicon runner and attaches it to
+each GitHub Release; signing would slot in there once there's a Developer ID.
+
+## Licenses inside the app
+
+The app bundles Python, PySide6/Qt and every package ModPDF depends on, and
+their licenses require their text to travel with it. `licenses.py` walks the
+full dependency tree at build time and copies each package's license files
+into `ModPDF.app/Contents/Resources/THIRD_PARTY_LICENSES`. PySide6 and Qt ship
+no license file of their own, so their texts (LGPL-3.0, and the GPL-3.0 it
+builds on) are kept in `licenses/` here. If any other bundled package has no
+license file, the build stops rather than shipping without it.
 
 ## Why PyInstaller is not part of `uv.lock`
 

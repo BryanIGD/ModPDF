@@ -1,5 +1,5 @@
 ModPDF
-Copyright 2026 ModPDF contributors
+Copyright 2026 BryanIGD
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,6 +24,13 @@ This product depends on software developed by third parties:
   Rich        MIT License                     https://github.com/Textualize/rich
   NumPy       BSD-3-Clause                    https://github.com/numpy/numpy
 
-Optional, installed only with the [gui] extra and never bundled:
+Optional, for the desktop app. Installing with pip, the [gui] extra pulls it
+from PyPI rather than including it:
 
   PySide6     LGPL-3.0                        https://www.qt.io/qt-for-python
+
+The macOS app (ModPDF.app) is different: it bundles Python (PSF License),
+every package above and their own dependencies, and PySide6, Shiboken6 and
+Qt, which stay separate, replaceable dynamic libraries under LGPL-3.0. The
+license text of every bundled component is inside the app, in
+ModPDF.app/Contents/Resources/THIRD_PARTY_LICENSES.
