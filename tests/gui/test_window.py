@@ -12,8 +12,11 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QCoreApplication
+from PySide6.QtWidgets import QScrollArea
 
 from modpdf.gui.session import load
+from modpdf.gui.widgets import ElidedLabel
 from modpdf.gui.window import PAGE_ROLE, MainWindow
 from modpdf.security import netguard
 from tests.conftest import PageMaker, build_hostile_pdf, page_markers
@@ -145,3 +148,60 @@ class TestTheGuardIsOn:
             assert window.session is not None
             out = window.session.save_to(tmp_path / "out.pdf")
         assert page_markers(out) == [2, 3, 4]
+
+
+class TestLongFileNames:
+    """A long file name has no spaces to wrap at. It used to widen the whole
+    inspector past its edge, cutting off every value and button on the
+    right, because each panel's scroll area sized its content to the widest
+    label instead of to the panel. Seen first on a real 40-page document."""
+
+    NAME = "Ley-Orgánica-de-Telecomunicaciones-Registro-Oficial-Suplemento.pdf"
+
+    @pytest.fixture
+    def shown(self, window: MainWindow, make_pdf: PageMaker) -> MainWindow:
+        window.resize(1118, 860)  # the size of the window the bug was reported at
+        window.show()
+        open_now(window, make_pdf(3, name=self.NAME))
+        QCoreApplication.processEvents()
+        return window
+
+    def test_no_panel_is_wider_than_the_inspector(self, shown: MainWindow) -> None:
+        for key in shown.panel_index:
+            shown._show_panel(key)
+            QCoreApplication.processEvents()
+            area = shown.panels.currentWidget()
+            assert isinstance(area, QScrollArea)
+            content = area.widget()
+            assert content is not None
+            assert content.width() <= area.viewport().width(), key
+
+    def test_the_name_is_shortened_in_the_middle_with_the_full_name_on_hover(
+        self, shown: MainWindow
+    ) -> None:
+        label = shown.doc_fact_values["name"]
+        assert isinstance(label, ElidedLabel)
+        assert "…" in label.displayedText()
+        assert label.displayedText().startswith("Ley-")
+        assert label.displayedText().endswith(".pdf")  # the extension stays visible
+        assert label.toolTip() == self.NAME
+        assert label.text() == self.NAME  # code reading the label still gets it all
+
+    def test_a_short_name_is_shown_whole_with_no_tooltip(
+        self, window: MainWindow, make_pdf: PageMaker
+    ) -> None:
+        window.resize(1118, 860)
+        window.show()
+        open_now(window, make_pdf(3, name="short.pdf"))
+        QCoreApplication.processEvents()
+        label = window.doc_fact_values["name"]
+        assert isinstance(label, ElidedLabel)
+        assert label.displayedText() == "short.pdf"
+        assert label.toolTip() == ""
+
+    def test_a_small_file_size_is_not_shown_as_zero_megabytes(
+        self, window: MainWindow, make_pdf: PageMaker
+    ) -> None:
+        open_now(window, make_pdf(1))
+        assert "0.0 MB" not in window.subtitle_label.text()
+        assert "KB" in window.subtitle_label.text()

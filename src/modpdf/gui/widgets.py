@@ -5,18 +5,28 @@ from __future__ import annotations
 from PySide6.QtCore import (
     Property,
     QEasingCurve,
+    QEvent,
     QPropertyAnimation,
     QSize,
     Qt,
     Signal,
 )
-from PySide6.QtGui import QColor, QIcon, QMouseEvent, QPainter, QPainterPath, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QIcon,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+    QResizeEvent,
+)
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSpinBox, QWidget
 
 from modpdf.gui import theme
 
 __all__ = [
     "Chip",
+    "ElidedLabel",
     "RangeRow",
     "SectionLabel",
     "SegmentedControl",
@@ -308,6 +318,62 @@ class SegmentedControl(QWidget):
             int(self._knob_x), self._PAD, knob_width, knob_height, knob_height / 2, knob_height / 2
         )
         painter.end()
+
+
+class ElidedLabel(QLabel):
+    """One line of text that shortens itself with "…" to fit, instead of
+    forcing whatever holds it to be wider.
+
+    For file names: they have no spaces to wrap at and can be any length, and
+    a plain QLabel will not get narrower than its whole text. The middle is
+    what gets cut, so the start of the name and its `.pdf` both stay visible.
+    When anything is cut, the tooltip holds the full text.
+
+    `text()` returns the full text, not what is on screen, so code reading the
+    label gets the real value; `displayedText()` returns what is drawn.
+    """
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__()
+        self._full = ""
+        self.setText(text)
+
+    def setText(self, text: str) -> None:
+        self._full = text
+        self._fit()
+
+    def text(self) -> str:
+        return self._full
+
+    def displayedText(self) -> str:
+        return super().text()
+
+    def sizeHint(self) -> QSize:
+        # Ask for room for the whole text; a layout with space to spare gives it.
+        width = self.fontMetrics().horizontalAdvance(self._full)
+        margins = self.contentsMargins()
+        return QSize(width + margins.left() + margins.right(), super().sizeHint().height())
+
+    def minimumSizeHint(self) -> QSize:
+        # ...but never insist on it: this is what lets the label shrink.
+        return QSize(self.fontMetrics().horizontalAdvance("…"), super().minimumSizeHint().height())
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._fit()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        # A stylesheet can change the font after the text was set.
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self._fit()
+
+    def _fit(self) -> None:
+        shown = self.fontMetrics().elidedText(
+            self._full, Qt.TextElideMode.ElideMiddle, max(self.contentsRect().width(), 0)
+        )
+        super().setText(shown)
+        self.setToolTip(self._full if shown != self._full else "")
 
 
 class SectionLabel(QLabel):
